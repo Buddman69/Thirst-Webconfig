@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thirst Config</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,400;0,600;1,600;1,800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="streaks" aria-hidden="true"></div>
+
+<header>
+  <div class="brand"><span class="mark">THIRST</span><span class="sub">CONFIG</span></div>
+  <nav id="tabs" class="hidden" aria-label="Sections">
+    <button data-tab="home" class="active">Home</button>
+    <button data-tab="sticks">Sticks</button>
+    <button data-tab="buttons">Buttons</button>
+    <button data-tab="advanced">Advanced</button>
+  </nav>
+  <div class="conn">
+    <span id="status">Not connected</span>
+    <button id="connect" class="primary">Connect controller</button>
+    <button id="disconnect" class="hidden">Disconnect</button>
+  </div>
+</header>
+
+<div id="connect-help" class="panel">
+  <h2>Connect</h2>
+  <p>Plug the controller in by USB and press <strong>Connect controller</strong>. Choose the entry
+     for its configuration interface when the browser asks.</p>
+  <p class="muted">Needs a Chromium browser (Chrome, Edge) for WebHID. Nothing is installed; the page talks to
+     the controller directly. Settings are saved on the controller.</p>
+  <p id="no-webhid" class="msg bad hidden">This browser has no WebHID. Use Chrome or Edge.</p>
+</div>
+
+<main id="app" class="hidden">
+  <!-- Always visible: what the controller is and how it is doing -->
+  <section class="panel strip" id="sec-controller">
+    <div class="stat"><div class="k">Board</div><div class="v" id="st-board">-</div></div>
+    <div class="stat"><div class="k">Firmware</div><div class="v" id="st-fw">-</div></div>
+    <div class="stat"><div class="k">Output mode <button class="info" data-info="mode" aria-label="About output mode">i</button></div>
+      <div class="v" id="st-mode">-</div>
+      <select id="st-mode-sel" class="hidden" aria-label="Output mode"></select>
+      <div class="sub msg" id="mode-msg"></div></div>
+    <div id="st-output" class="strip-group"></div>
+    <div class="sep"></div>
+    <div class="stat"><div class="k">Polling rate <button class="info" data-info="polling" aria-label="About polling rate">i</button></div>
+      <div class="v hot" id="st-poll">-</div><div class="sub" id="st-poll-sub"></div></div>
+    <div class="stat"><div class="k">Missed frames <button class="info" data-info="missed" aria-label="About missed frames">i</button></div>
+      <div class="v hot" id="st-miss">-</div><div class="sub" id="st-miss-sub"></div></div>
+    <div class="stat"><div class="k">Press to PC <button class="info" data-info="delay" aria-label="About press to PC">i</button></div>
+      <div class="v hot" id="st-delay">-</div><div class="sub" id="st-delay-sub"></div></div>
+  </section>
+
+  <!-- ============================================================ HOME -->
+  <div class="tab" data-tab="home">
+    <div class="grid">
+      <section class="panel span-7" id="sec-live">
+        <h2>Live input <button class="info" data-info="live" aria-label="About live input">i</button></h2>
+        <div id="pad"></div>
+      </section>
+      <section class="panel span-5" id="sec-axes">
+        <h2>Analog pipeline <button class="info" data-info="pipeline" aria-label="About the analog pipeline">i</button></h2>
+        <table id="axis-table" class="axis-table"></table>
+        <div class="chips" id="chips"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ STICKS -->
+  <div class="tab hidden" data-tab="sticks">
+    <div class="grid">
+      <section class="panel span-12" id="sec-cal">
+        <h2>Calibration <button class="info" data-info="cal" aria-label="About stick calibration">i</button></h2>
+        <div class="cal-grid">
+          <div>
+            <p class="muted" id="cal-state" style="margin-top:0"></p>
+            <div class="row">
+              <button id="cal-start">Start</button>
+              <button id="cal-centre" disabled>Recentre</button>
+              <button id="cal-cancel" disabled>Cancel</button>
+            </div>
+            <div class="msg" id="cal-msg"></div>
+            <div id="settings-cal" class="side-settings"></div>
+          </div>
+          <div>
+            <table id="cal-table"></table>
+            <p class="muted small">Shown in <span id="cal-bits"></span>; stored as 16-bit.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel span-12" id="sec-finetune">
+        <h2>Fine-tune <button class="info" data-info="finetune" aria-label="About fine-tuning">i</button>
+          <span id="ft-unsaved" class="changed hidden">unsaved changes</span></h2>
+        <div class="row" style="margin-top:0">
+          <span class="muted">View:</span>
+          <button data-view="normal" class="view-btn">Normal</button>
+          <button data-view="zoom" class="view-btn">Centre ×10</button>
+          <button data-view="circle" class="view-btn">Circularity</button>
+          <button id="ft-circle-reset" class="hidden">Clear trace</button>
+          <span class="muted" style="margin-left:12px">Step:</span>
+          <select id="ft-step" aria-label="Step size in displayed counts"></select>
+          <span class="muted" id="ft-bits" style="margin-left:12px"></span>
+        </div>
+        <p class="muted small" id="ft-hint"></p>
+        <p class="ft-pad" id="ft-pad"></p>
+        <div class="ft-grid">
+          <div class="ft-stick" data-stick="0"></div>
+          <div class="ft-stick" data-stick="1"></div>
+        </div>
+        <div class="row">
+          <button id="ft-save" class="primary" disabled>Save to controller</button>
+          <button id="ft-revert" disabled>Revert</button>
+        </div>
+        <div class="msg" id="ft-msg"></div>
+        <details id="ft-history" style="margin-top:10px">
+          <summary class="muted">Saved calibrations on this computer</summary>
+          <div id="ft-history-list"></div>
+        </details>
+      </section>
+
+      <section class="panel span-12" id="sec-shape">
+        <h2>Stick shape <button class="info" data-info="shape" aria-label="About stick shape">i</button></h2>
+        <div id="shape-editor"></div>
+      </section>
+
+      <section class="panel span-12" id="sec-curve">
+        <h2>Response <button class="info" data-info="curve" aria-label="About response curves">i</button></h2>
+        <div id="curve-editor"></div>
+        <div id="settings-deadzone" class="side-settings"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ BUTTONS -->
+  <div class="tab hidden" data-tab="buttons">
+    <div class="grid">
+      <section class="panel span-7" id="sec-remap">
+        <h2>Button mapping <button class="info" data-info="remap" aria-label="About button mapping">i</button></h2>
+        <div id="remap"></div>
+        <div class="msg" id="remap-msg"></div>
+      </section>
+      <section class="panel span-5" id="sec-btnset">
+        <h2>Buttons</h2>
+        <div id="settings-buttons" class="side-settings"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ ADVANCED -->
+  <div class="tab hidden" data-tab="advanced">
+    <div class="grid">
+      <section class="panel span-12" id="sec-settings">
+        <h2>Advanced settings <button class="info" data-info="settings" aria-label="About settings">i</button></h2>
+        <div id="settings"></div>
+      </section>
+      <section class="panel span-12" id="sec-fault">
+        <h2>Last fault <button class="info" data-info="fault" aria-label="About the fault record">i</button></h2>
+        <p id="fault" class="muted" style="margin-top:0"></p>
+        <div class="row"><button id="fault-clear">Clear</button></div>
+      </section>
+    </div>
+  </div>
+  <div class="msg toast" id="settings-msg"></div>
+</main>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
