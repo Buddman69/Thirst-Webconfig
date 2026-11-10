@@ -48,14 +48,17 @@ let editors = [];
 // infos: [left setting, right setting] (SETTING_INFO fields plus .data from GET_SETTING)
 // save(setting, data[]) -> Promise<status string>
 export function initCurves(host, infos, save, restore) {
-  host.innerHTML = '<div class="editors"></div><div class="row"><button data-act="copy">Copy left to right</button></div>';
+  host.innerHTML = '<div class="editors"></div><div class="row"><button data-act="copy">Copy left to right</button>'
+    + '<button data-act="copy-back">Copy right to left</button></div>';
   const box = host.querySelector('.editors');
   editors = infos.map((s, i) => makeEditor(box, s, i ? 'Right stick' : 'Left stick', save, restore));
-  host.querySelector('[data-act=copy]').addEventListener('click', async () => {
+  const copy = async (from, to) => {
     if (editors.length < 2) return;
-    editors[1].set(editors[0].xs.slice(), editors[0].ys.slice());
-    await editors[1].commit();
-  });
+    editors[to].set(editors[from].xs.slice(), editors[from].ys.slice());
+    await editors[to].commit();
+  };
+  host.querySelector('[data-act=copy]').addEventListener('click', () => copy(0, 1));
+  host.querySelector('[data-act=copy-back]').addEventListener('click', () => copy(1, 0));
 }
 
 const MAX_INNER = 10;   // adjustable points: 1..10, plus the two fixed ends
