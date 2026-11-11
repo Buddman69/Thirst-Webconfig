@@ -13,6 +13,7 @@ const DEVICES = [
   { vendorId: 0x1209, productId: 0x0001, usagePage: HID_USAGE_PAGE },  // DInput output mode
   { vendorId: 0x1209, productId: 0x0002, usagePage: HID_USAGE_PAGE },  // XInput output mode
 ];
+const REMAP_NONE = 253;
 const REMAP_SELF = 254;
 const REMAP_DEFAULT = 255;
 const STREAM_HZ = 60;
@@ -49,8 +50,9 @@ const INFO = {
   live: 'What the controller is sending right now. The dots are the sticks; the bars are L2 and R2. A filled '
     + 'button is what the PC sees; an outlined one is physically pressed. So a back button mapped to Cross '
     + 'outlines Back 1 and fills Cross.',
-  remap: 'Choose what each mappable button presses. "Itself" sends the button as it is. A change saves on the '
-    + 'controller straight away; Default puts back the board\'s own mapping.',
+  remap: 'Choose what each button presses, for the profile in use. "Itself" sends the button as it is; "Nothing" '
+    + 'switches it off; any other button swaps it (two buttons can trade places). A change saves on the controller '
+    + 'straight away; Default puts back the board\'s own mapping. FN always stays FN.',
   finetune: 'Adjust each stick by hand while watching the result, then save. Centre moves where the stick '
     + 'reads zero. Reach is how far the stick travels to read 100 % in each direction: less reach reaches full '
     + 'sooner. Values are shown at the stick resolution the PC gets (8 bits in DualSense mode); the '
@@ -305,31 +307,79 @@ function showTab(name) {
 
 // ------------------------------------------------------------------ mapping
 
+// Every button the board has, grouped; FN (fixed) stays as it is
+const REMAP_GROUPS = [
+  ['Face buttons', ['CROSS', 'CIRCLE', 'SQUARE', 'TRIANGLE']],
+  ['D-pad', ['DPAD_UP', 'DPAD_DOWN', 'DPAD_LEFT', 'DPAD_RIGHT']],
+  ['Shoulders and triggers', ['L1', 'R1', 'L2', 'R2']],
+  ['Stick clicks', ['L3', 'R3']],
+  ['System', ['CREATE', 'OPTIONS', 'PS', 'TOUCHPAD', 'MUTE']],
+  ['Back buttons', ['BB1', 'BB2', 'BB3', 'BB4']],
+];
+const mapName = (t) => (t === REMAP_SELF ? 'Itself' : t === REMAP_NONE ? 'Nothing (off)' : name(t));
+let remapState = null;
+
 async function loadRemap(reply) {
   const r = reply ?? await call('GET_REMAP');
   const { active, defaults } = r.fields;
+  // older firmware sends no present mask: then offer the buttons with a mapping, as before
+  const present = r.fields.present ?? 0;
+  const fixed = r.fields.fixed ?? 0;
+  const has = (i) => (present ? (present >>> i) & 1 : active[i] !== REMAP_SELF || defaults[i] !== REMAP_SELF);
+  const isFixed = (i) => (fixed >>> i) & 1;
+  remapState = { active, defaults };
   const box = $('remap');
   box.innerHTML = '';
-  const shown = active.map((a, i) => i).filter((i) => active[i] !== REMAP_SELF || defaults[i] !== REMAP_SELF);
-  if (!shown.length) {
+  const known = new Set(REMAP_GROUPS.flatMap(([, ks]) => ks));
+  const groups = REMAP_GROUPS.concat([['Other', ENUMS.button.filter((b) => !known.has(b))]]);
+  // What a button can press: itself, nothing, or any other button that isn't fixed
+  const targets = ENUMS.button.map((_, t) => t).filter((t) => !isFixed(t));
+  let shown = 0;
+  for (const [title, keys] of groups) {
+    const idx = keys.map((k) => ENUMS.button.indexOf(k)).filter((i) => i >= 0 && has(i) && !isFixed(i));
+    if (!idx.length) continue;
+    const g = document.createElement('div');
+    g.className = 'map-group';
+    g.innerHTML = `<div class="group">${escapeHtml(title)}</div>`;
+    for (const i of idx) {
+      shown++;
+      const row = document.createElement('div');
+      row.className = 'map-row';
+      const opts = [`<option value="${REMAP_SELF}">Itself</option>`, `<option value="${REMAP_NONE}">Nothing (off)</option>`]
+        .concat(targets.filter((t) => t !== i).map((t) => `<option value="${t}">${escapeHtml(name(t))}</option>`));
+      const changed = active[i] !== defaults[i];
+      row.innerHTML = `<div>${escapeHtml(name(i))} ${changed ? '<span class="changed">changed</span>' : ''}</div>
+        <select aria-label="${escapeHtml(name(i))} presses">${opts.join('')}</select>
+        <button ${changed ? '' : 'disabled'} title="Back to ${escapeHtml(mapName(defaults[i]))}">Default</button>`;
+      const sel = row.querySelector('select');
+      sel.value = String(active[i]);
+      sel.addEventListener('change', guard(() => setRemap(i, Number(sel.value))));
+      row.querySelector('button').addEventListener('click', guard(() => setRemap(i, REMAP_DEFAULT)));
+      g.appendChild(row);
+    }
+    box.appendChild(g);
+  }
+  if (!shown) {
     box.innerHTML = '<p class="muted">This controller has no mappable buttons.</p>';
     return;
   }
-  for (const i of shown) {
-    const row = document.createElement('div');
-    row.className = 'map-row';
-    const opts = [`<option value="${REMAP_SELF}">Itself</option>`]
-      .concat(ENUMS.button.map((b, t) => (t === i ? '' : `<option value="${t}">${escapeHtml(name(t))}</option>`)));
-    const changed = active[i] !== defaults[i];
-    row.innerHTML = `<div>${escapeHtml(name(i))} ${changed ? '<span class="changed">changed</span>' : ''}</div>
-      <select aria-label="${escapeHtml(name(i))} presses">${opts.join('')}</select>
-      <button ${changed ? '' : 'disabled'}>Default</button>`;
-    const sel = row.querySelector('select');
-    sel.value = String(active[i]);
-    sel.addEventListener('change', () => setRemap(i, Number(sel.value)));
-    row.querySelector('button').addEventListener('click', () => setRemap(i, REMAP_DEFAULT));
-    box.appendChild(row);
+  const n = active.filter((a, i) => a !== defaults[i]).length;
+  const foot = document.createElement('div');
+  foot.className = 'row';
+  foot.innerHTML = `<button ${n ? '' : 'disabled'}>Reset all to default</button>
+    <span class="muted small">${n ? `${n} changed in this profile` : 'All buttons as they come'}. FN stays FN: it switches profiles and recentres.</span>`;
+  foot.querySelector('button').addEventListener('click', guard(resetAllRemap));
+  box.appendChild(foot);
+}
+
+async function resetAllRemap() {
+  if (!remapState) return;
+  let last = null;
+  for (let i = 0; i < remapState.active.length; i++) {
+    if (remapState.active[i] !== remapState.defaults[i]) last = await call('SET_REMAP', { source: i, target: REMAP_DEFAULT });
   }
+  note('remap-msg', 'Every button back to its default.', true);
+  await loadRemap(last ?? undefined);
 }
 
 async function setRemap(source, target) {
@@ -1133,7 +1183,6 @@ const FILE_FORMAT = 1;
 const scopeOf = (s) => ENUMS.setting_scope?.[s.scope] ?? 'ALL';
 const sideOf = (s) => ({ LEFT: ' (left stick)', RIGHT: ' (right stick)' }[scopeOf(s)] ?? '');
 const isData = (s) => ['CURVE', 'SECTORS'].includes(ENUMS.setting_type[s.type]);
-const mapName = (t) => (t === REMAP_SELF ? 'Itself' : name(t));
 
 async function buildFile() {
   const file = {
@@ -1151,7 +1200,8 @@ async function buildFile() {
     const { active } = (await call('GET_REMAP')).fields;
     file.mapping = {};
     active.forEach((t, i) => {
-      if (ENUMS.button[i] && (t === REMAP_SELF || ENUMS.button[t])) file.mapping[ENUMS.button[i]] = t === REMAP_SELF ? 'SELF' : ENUMS.button[t];
+      const v = t === REMAP_SELF ? 'SELF' : t === REMAP_NONE ? 'NONE' : ENUMS.button[t];
+      if (ENUMS.button[i] && v) file.mapping[ENUMS.button[i]] = v;
     });
   }
   if ($('file-cal').checked && hasFeat('CALIBRATION') && cal) {
@@ -1221,7 +1271,7 @@ async function planFile(file) {
     const { active } = (await call('GET_REMAP')).fields;
     for (const [src, tgt] of Object.entries(file.mapping)) {
       const i = ENUMS.button.indexOf(src);
-      const t = tgt === 'SELF' ? REMAP_SELF : ENUMS.button.indexOf(tgt);
+      const t = tgt === 'SELF' ? REMAP_SELF : tgt === 'NONE' ? REMAP_NONE : ENUMS.button.indexOf(tgt);
       if (i < 0 || i >= active.length || t < 0) { plan.skipped++; continue; }
       if (active[i] !== t) plan.mapping.push({ i, t, was: active[i] });
     }
