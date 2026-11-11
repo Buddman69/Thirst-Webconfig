@@ -45,6 +45,8 @@
       <div class="v" id="st-mode">-</div>
       <select id="st-mode-sel" class="hidden" aria-label="Output mode"></select>
       <div class="sub msg" id="mode-msg"></div></div>
+    <div class="stat hidden" id="st-profile-box"><div class="k">Profile <button class="info" data-info="profile" aria-label="About profiles">i</button></div>
+      <select id="st-profile" aria-label="Profile in use"></select></div>
     <div id="st-output" class="strip-group"></div>
     <div class="sep"></div>
     <div class="stat"><div class="k">Polling rate <button class="info" data-info="polling" aria-label="About polling rate">i</button></div>
@@ -66,6 +68,34 @@
         <h2>Analog pipeline <button class="info" data-info="pipeline" aria-label="About the analog pipeline">i</button></h2>
         <table id="axis-table" class="axis-table"></table>
         <div class="chips" id="chips"></div>
+      </section>
+      <section class="panel span-12" id="sec-profiles">
+        <h2>Profiles <button class="info" data-info="profile" aria-label="About profiles">i</button></h2>
+        <div class="prof-tiles" id="prof-tiles"></div>
+        <div class="row">
+          <input id="prof-name" type="text" maxlength="19" placeholder="Name this profile" aria-label="Name of the profile in use">
+          <button id="prof-rename">Save name</button>
+          <span class="sep-v"></span>
+          <label class="check" for="prof-copy-to">Copy this profile to</label>
+          <select id="prof-copy-to" aria-label="Profile to copy into"></select>
+          <button id="prof-copy">Copy</button>
+          <span class="sep-v"></span>
+          <button id="prof-reset">Reset this profile</button>
+        </div>
+        <p class="muted small" id="prof-hint"></p>
+        <div class="msg" id="prof-msg"></div>
+      </section>
+      <section class="panel span-12" id="sec-file">
+        <h2>Save and load <button class="info" data-info="file" aria-label="About saving to a file">i</button></h2>
+        <div class="row" style="margin-top:0">
+          <input id="file-name" type="text" maxlength="40" placeholder="Name (optional)" aria-label="Name for the saved file">
+          <label class="check"><input type="checkbox" id="file-cal" checked> Include stick calibration</label>
+          <button id="file-save" class="primary">Save to file</button>
+          <button id="file-load">Load from file</button>
+          <input id="file-pick" type="file" accept=".json,application/json" class="hidden">
+        </div>
+        <div id="file-preview" class="hidden"></div>
+        <div class="msg" id="file-msg"></div>
       </section>
     </div>
   </div>

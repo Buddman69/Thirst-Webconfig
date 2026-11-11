@@ -104,7 +104,7 @@ button {
 button:hover:not(:disabled) { border-color: var(--hot); }
 button.primary { background: var(--grad); border-color: transparent; color: #fff; font-weight: 600; box-shadow: var(--glow); }
 button:disabled { opacity: .4; cursor: default; }
-select, input[type=number] {
+select, input[type=number], input[type=text] {
   font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 3px; border: 1px solid var(--line);
   background: #0a0b0e; color: var(--ink);
 }
@@ -121,6 +121,29 @@ input[type=checkbox] { accent-color: var(--hot); width: 16px; height: 16px; }
          padding: 6px 12px; border-radius: 3px; z-index: 5; }
 .toast:empty { display: none; }
 .changed { color: var(--warn); font: 400 12px Inter, sans-serif; text-transform: none; letter-spacing: 0; }
+
+/* Profiles */
+.prof-tiles { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 8px; }
+@media (max-width: 900px) { .prof-tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.prof-tiles button { text-align: left; padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.prof-tiles .num { font: italic 800 13px "Exo 2", sans-serif; color: var(--muted); }
+.prof-tiles .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prof-tiles button.on { border-color: var(--hot); box-shadow: var(--glow); }
+.prof-tiles button.on .num { color: var(--hot); }
+.sep-v { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+#prof-name { width: min(220px, 100%); }
+.allp { font-size: 11px; color: var(--muted); font-weight: 400; margin-left: 4px; }
+
+/* Save and load */
+#file-name { width: min(260px, 100%); }
+label.check { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; cursor: pointer; }
+#file-preview { margin-top: 12px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 3px; background: #0a0b0e; }
+#file-preview p { margin: 0 0 8px; font-size: 13px; }
+#file-preview .part { margin: 10px 0 4px; }
+#file-preview ul { margin: 4px 0 0; padding-left: 26px; font-size: 13px; color: var(--muted);
+                   columns: 2 260px; column-gap: 24px; }
+#file-preview li { break-inside: avoid; }
+#file-preview li b { color: var(--ink); font-weight: 500; }
 
 /* (i) buttons and the text they open */
 button.info {

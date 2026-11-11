@@ -76,6 +76,14 @@ const INFO = {
     + 'where the stick is now. The deadzone settings below apply before the curve.',
   settings: 'Options this controller offers. Each one saves on the controller as you change it. Press (i) '
     + 'beside a setting to see what it does.',
+  profile: 'The controller keeps 8 profiles, each with its own settings and button mapping. Calibration and the '
+    + 'few settings marked "all profiles" belong to the controller and are the same in every profile. Every change '
+    + 'you make here goes into the profile in use. On the controller, hold FN and press D-pad up, right, down or '
+    + 'left for profiles 1 to 4, or Triangle, Circle, Cross or Square for 5 to 8; the light flashes the number.',
+  file: 'Saves everything you have set (every setting, the button mapping and, if ticked, the stick '
+    + 'calibration) to a file on your computer, and loads one back. Loading shows what would change first and '
+    + 'changes nothing until you press Apply. Calibration belongs to one controller\'s sticks: leave it out of a '
+    + 'file you give to someone else.',
   fault: 'If the controller ever crashes and restarts, the reason is kept here until it is unplugged. Useful '
     + 'for bug reports; Clear removes it.',
 };
@@ -127,6 +135,7 @@ async function connect(d) {
   $('tabs').classList.remove('hidden');
   const f = hello.fields;
   const has = (feat) => (f.features >> ENUMS.feature.indexOf(feat)) & 1;
+  feats = f.features;
   $('status').textContent = `Connected: ${f.board}, firmware ${f.firmware}`;
   $('st-board').textContent = f.board;
   $('st-fw').textContent = f.firmware;
@@ -137,6 +146,12 @@ async function connect(d) {
   $('sec-cal').classList.toggle('hidden', !has('CALIBRATION'));
   $('sec-settings').classList.toggle('hidden', !has('SETTINGS'));
   $('sec-fault').classList.toggle('hidden', !has('FAULT'));
+  $('sec-file').classList.toggle('hidden', !has('SETTINGS'));
+  $('sec-profiles').classList.toggle('hidden', !has('PROFILES'));
+  $('st-profile-box').classList.toggle('hidden', !has('PROFILES'));
+  closePlan();
+  profiles = null;
+  if (has('PROFILES')) await loadProfiles();
   $('sec-finetune').classList.toggle('hidden', !has('CALIBRATION'));
   boardName = f.board;
   buildChips();
@@ -151,11 +166,14 @@ async function connect(d) {
     await call('GET_STATS');	// restart the controller's window so the first figure is a clean second
     statsTimer = setInterval(() => loadStats().catch(() => {}), 1000);
   }
+  if (has('PROFILES')) profileTimer = setInterval(() => watchProfile().catch(() => {}), 1000);
 }
 
 async function disconnect() {
   clearInterval(statsTimer);
   statsTimer = null;
+  clearInterval(profileTimer);
+  profileTimer = null;
   if (dev) {
     try { await call('STREAM', { rate_hz: 0 }); } catch { /* already gone */ }
     dev.removeEventListener('inputreport', onReport);
@@ -824,6 +842,7 @@ async function loadSettings() {
     s.value = g.value;
     s.data = Array.from(g.data ?? []).slice(0, g.points ?? 0);
   }
+  allSettings = infos;
 
   // The Output group sits in the Controller panel, beside the output mode it goes with
   const out = $('st-output');
@@ -921,7 +940,8 @@ function showModeNotes() {
 function settingRow(s) {
   const row = document.createElement('div');
   row.className = 'setting';
-  row.innerHTML = `<div class="name">${escapeHtml(s.name)}
+  const allp = profiles && !s.profile ? '<span class="allp" title="The same in every profile">all profiles</span>' : '';
+  row.innerHTML = `<div class="name">${escapeHtml(s.name)}${allp}
       <button class="info" data-setting="${s.id}" aria-label="About ${escapeHtml(s.name)}">i</button></div>`;
   row.appendChild(settingControl(s));
   const def = document.createElement('div');
@@ -990,6 +1010,305 @@ async function setSetting(s, value) {
   if (s === outBitsSetting) updateDispBits();
   note('settings-msg', r.status === 'OK' ? `${s.name}${side}: saved.` : `${s.name}${side}: refused (${r.status}).`,
        r.status === 'OK');
+}
+
+// ------------------------------------------------------------------ profiles
+// The controller keeps 8 profiles; per-profile settings (SETTING_INFO.profile) and the button
+// mapping read and change the one in use. A switch from the controller (FN + a button) is picked
+// up by asking once a second.
+
+let profiles = null;   // { active, count, names[] }
+let profileTimer = null;
+let profileBusy = false;
+const profName = (i) => profiles.names[i] || `Profile ${i + 1}`;
+
+async function loadProfiles() {
+  const first = (await call('PROFILE_INFO', { index: 0 })).fields;
+  const names = [first.name];
+  for (let i = 1; i < first.count; i++) names.push((await call('PROFILE_INFO', { index: i })).fields.name);
+  profiles = { active: first.active, count: first.count, names };
+  renderProfiles();
+}
+
+function renderProfiles() {
+  if (!profiles) return;
+  const opts = (skip) => profiles.names.map((_, i) => (i === skip ? ''
+    : `<option value="${i}" ${i === profiles.active ? 'selected' : ''}>${i + 1}. ${escapeHtml(profName(i))}</option>`)).join('');
+  $('st-profile').innerHTML = opts(-1);
+  $('st-profile').value = String(profiles.active);
+  $('prof-copy-to').innerHTML = opts(profiles.active);
+  $('prof-name').value = profiles.names[profiles.active];
+  $('prof-tiles').innerHTML = '';
+  profiles.names.forEach((_, i) => {
+    const b = document.createElement('button');
+    b.className = i === profiles.active ? 'on' : '';
+    b.setAttribute('aria-pressed', String(i === profiles.active));
+    b.innerHTML = `<span class="num">${i + 1}</span><span class="nm">${escapeHtml(profName(i))}</span>`;
+    b.addEventListener('click', guard(() => useProfile(i)));
+    $('prof-tiles').appendChild(b);
+  });
+  const keys = ['D-pad up', 'D-pad right', 'D-pad down', 'D-pad left', 'Triangle', 'Circle', 'Cross', 'Square'];
+  $('prof-hint').textContent = `On the controller: hold FN and press ${keys[profiles.active] ?? ''} for this profile `
+    + '(FN + D-pad up/right/down/left = 1-4, FN + Triangle/Circle/Cross/Square = 5-8). The light flashes the number.';
+}
+
+// Everything that depends on the profile in use
+async function reloadProfileView() {
+  if (hasFeat('SETTINGS')) await loadSettings();
+  if (hasFeat('REMAP')) await loadRemap();
+}
+
+async function useProfile(i) {
+  if (!profiles || i === profiles.active) return;
+  profileBusy = true;
+  try {
+    const r = await call('PROFILE_SELECT', { index: i });
+    if (r.status !== 'OK') { note('prof-msg', `Refused (${r.status}).`, false); return; }
+    profiles.active = r.fields.active;
+    renderProfiles();
+    await reloadProfileView();
+    note('prof-msg', `Now using ${profName(i)}.`, true);
+  } finally { profileBusy = false; }
+}
+
+// A switch made on the controller itself
+async function watchProfile() {
+  if (!profiles || profileBusy) return;
+  const f = (await call('PROFILE_INFO', { index: 0 })).fields;
+  if (f.active === profiles.active || profileBusy) return;
+  profileBusy = true;
+  try {
+    profiles.active = f.active;
+    renderProfiles();
+    await reloadProfileView();
+    note('prof-msg', `Switched on the controller to ${profName(f.active)}.`, true);
+  } finally { profileBusy = false; }
+}
+
+async function renameProfile() {
+  const i = profiles.active;
+  const nameIn = $('prof-name').value.replace(/[^\x20-\x7E]/g, '').trim().slice(0, 19);
+  const r = await call('PROFILE_NAME', { index: i, name: nameIn });
+  if (r.status === 'OK') profiles.names[i] = r.fields.name;
+  renderProfiles();
+  note('prof-msg', r.status === 'OK' ? 'Name saved.' : `Refused (${r.status}).`, r.status === 'OK');
+}
+
+async function copyProfile() {
+  const to = Number($('prof-copy-to').value);
+  if (!confirm(`Copy ${profName(profiles.active)} into profile ${to + 1} (${profName(to)})? `
+    + `Everything in profile ${to + 1} is replaced.`)) return;
+  const r = await call('PROFILE_COPY', { from: profiles.active, to });
+  if (r.status === 'OK') profiles.names[to] = r.fields.name;
+  renderProfiles();
+  note('prof-msg', r.status === 'OK' ? `Copied into profile ${to + 1}.` : `Refused (${r.status}).`, r.status === 'OK');
+}
+
+async function resetProfile() {
+  const i = profiles.active;
+  if (!confirm(`Put ${profName(i)} back to the defaults? Its settings, button mapping and name are cleared. `
+    + 'Calibration is not touched.')) return;
+  profileBusy = true;
+  try {
+    const r = await call('PROFILE_RESET', { index: i });
+    if (r.status === 'OK') profiles.names[i] = r.fields.name;
+    renderProfiles();
+    await reloadProfileView();
+    note('prof-msg', r.status === 'OK' ? 'Back to the defaults.' : `Refused (${r.status}).`, r.status === 'OK');
+  } finally { profileBusy = false; }
+}
+
+// ------------------------------------------------------------------ save and load (a file on the PC)
+// The file holds every setting by id, as this controller reports them (names are only there to
+// read), the button mapping by button name, and optionally the stick calibration. Loading
+// compares it with the controller and applies only what differs, once the user has seen the list.
+// The controller checks every value itself and refuses what it doesn't accept.
+
+let allSettings = [];
+let feats = 0;
+const hasFeat = (f) => (feats >> ENUMS.feature.indexOf(f)) & 1;
+const FILE_KIND = 'thirst-config';
+const FILE_FORMAT = 1;
+const scopeOf = (s) => ENUMS.setting_scope?.[s.scope] ?? 'ALL';
+const sideOf = (s) => ({ LEFT: ' (left stick)', RIGHT: ' (right stick)' }[scopeOf(s)] ?? '');
+const isData = (s) => ['CURVE', 'SECTORS'].includes(ENUMS.setting_type[s.type]);
+const mapName = (t) => (t === REMAP_SELF ? 'Itself' : name(t));
+
+async function buildFile() {
+  const file = {
+    kind: FILE_KIND, format: FILE_FORMAT,
+    name: $('file-name').value.trim() || (profiles ? profiles.names[profiles.active] : ''),
+    saved: new Date().toISOString(), board: boardName, firmware: $('st-fw').textContent, settings: [],
+  };
+  if (profiles) file.profile = profiles.active + 1;
+  for (const s of allSettings) {
+    const e = { id: s.id, name: s.name, scope: scopeOf(s) };
+    if (isData(s)) e.data = s.data.slice(); else e.value = s.value;
+    file.settings.push(e);
+  }
+  if (hasFeat('REMAP')) {
+    const { active } = (await call('GET_REMAP')).fields;
+    file.mapping = {};
+    active.forEach((t, i) => {
+      if (ENUMS.button[i] && (t === REMAP_SELF || ENUMS.button[t])) file.mapping[ENUMS.button[i]] = t === REMAP_SELF ? 'SELF' : ENUMS.button[t];
+    });
+  }
+  if ($('file-cal').checked && hasFeat('CALIBRATION') && cal) {
+    file.calibration = { bits: 16, min: [...cal.min], centre: [...cal.centre], max: [...cal.max] };
+  }
+  return file;
+}
+
+async function saveFile() {
+  const file = await buildFile();
+  // One line per setting, mapping entry and calibration row, so the file reads easily.
+  // (JSON.stringify escapes newlines inside strings, so every real newline is layout.)
+  const one = (v) => JSON.stringify(v, null, 1).replace(/\n\s*/g, ' ');
+  const text = `{\n${Object.entries(file).map(([k, v]) => {
+    if (Array.isArray(v)) return `  ${JSON.stringify(k)}: [\n${v.map((e) => `    ${one(e)}`).join(',\n')}\n  ]`;
+    if (v && typeof v === 'object') {
+      return `  ${JSON.stringify(k)}: {\n${Object.entries(v).map(([a, b]) => `    ${JSON.stringify(a)}: ${one(b)}`).join(',\n')}\n  }`;
+    }
+    return `  ${JSON.stringify(k)}: ${JSON.stringify(v)}`;
+  }).join(',\n')}\n}\n`;
+  const d = new Date();
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const base = (file.name || `thirst-${boardName}`).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') || 'thirst';
+  const fname = `${base}-${day}.json`;
+  if (window.showSaveFilePicker) {
+    // Chrome and Edge: a normal Save dialog, starting on the desktop
+    try {
+      const h = await window.showSaveFilePicker({
+        suggestedName: fname, startIn: 'desktop',
+        types: [{ description: 'Thirst settings', accept: { 'application/json': ['.json'] } }],
+      });
+      const w = await h.createWritable();
+      await w.write(text);
+      await w.close();
+      note('file-msg', `Saved ${h.name}.`, true);
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;   // cancelled
+      // otherwise fall back to a download
+    }
+  }
+  const a = Object.assign(document.createElement('a'), {
+    href: URL.createObjectURL(new Blob([text], { type: 'application/json' })), download: fname,
+  });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  note('file-msg', `Saved ${fname} to your downloads folder.`, true);
+}
+
+// What loading this file would change, against what the controller has now
+async function planFile(file) {
+  const byId = new Map(allSettings.map((s) => [s.id, s]));
+  const plan = { file, settings: [], skipped: 0, mapping: [], cal: null };
+  for (const e of file.settings) {
+    const s = byId.get(Number(e.id));
+    if (!s || isData(s) !== Array.isArray(e.data)) { plan.skipped++; continue; }
+    if (isData(s)) {
+      const data = e.data.slice(0, 26).map((v) => Math.max(0, Math.min(65535, Math.round(Number(v) || 0))));
+      if (JSON.stringify(data) !== JSON.stringify(s.data)) plan.settings.push({ s, data });
+    } else {
+      const v = Math.round(Number(e.value));
+      if (!Number.isFinite(v)) { plan.skipped++; continue; }
+      if (v !== s.value) plan.settings.push({ s, value: v });
+    }
+  }
+  if (file.mapping && typeof file.mapping === 'object' && hasFeat('REMAP')) {
+    const { active } = (await call('GET_REMAP')).fields;
+    for (const [src, tgt] of Object.entries(file.mapping)) {
+      const i = ENUMS.button.indexOf(src);
+      const t = tgt === 'SELF' ? REMAP_SELF : ENUMS.button.indexOf(tgt);
+      if (i < 0 || i >= active.length || t < 0) { plan.skipped++; continue; }
+      if (active[i] !== t) plan.mapping.push({ i, t, was: active[i] });
+    }
+  }
+  const c = file.calibration;
+  if (c && hasFeat('CALIBRATION') && cal) {
+    const n = cal.min.length;
+    const ok = c.bits === 16 && ['min', 'centre', 'max'].every((k) => Array.isArray(c[k]) && c[k].length === n);
+    if (!ok) plan.skipped++;
+    else if (['min', 'centre', 'max'].some((k) => c[k].some((v, j) => v !== cal[k][j]))) plan.cal = c;
+  }
+  return plan;
+}
+
+function showPlan(plan) {
+  const box = $('file-preview');
+  const f = plan.file;
+  const when = Number.isNaN(Date.parse(f.saved)) ? '' : `, saved ${new Date(f.saved).toLocaleString()}`;
+  const from = `${f.name ? `"${escapeHtml(String(f.name))}"` : 'This file'}${escapeHtml(when)}`
+    + `${f.board ? ` on ${escapeHtml(String(f.board))}` : ''}${f.firmware ? `, firmware ${escapeHtml(String(f.firmware))}` : ''}`;
+  const val = (c) => (c.data ? 'changed' : `${escapeHtml(showValue(c.s, c.s.value))} → ${escapeHtml(showValue(c.s, c.value))}`);
+  const part = (key, title, n, items, checked) => (n ? `<div class="part"><label class="check"><input type="checkbox"
+      data-part="${key}" ${checked ? 'checked' : ''}> ${title}</label>${items ? `<ul>${items}</ul>` : ''}</div>` : '');
+  let html = `<p>${from}.</p>`;
+  if (profiles) html += `<p>Goes into the profile in use: <b>${profiles.active + 1}. ${escapeHtml(profName(profiles.active))}</b>.</p>`;
+  html += part('settings', `Settings: ${plan.settings.length} different`, plan.settings.length,
+    plan.settings.map((c) => `<li><b>${escapeHtml(c.s.name)}${escapeHtml(sideOf(c.s))}</b>: ${val(c)}</li>`).join(''), true);
+  html += part('mapping', `Button mapping: ${plan.mapping.length} different`, plan.mapping.length,
+    plan.mapping.map((m) => `<li><b>${escapeHtml(name(m.i))}</b>: ${escapeHtml(mapName(m.was))} → ${escapeHtml(mapName(m.t))}</li>`).join(''), true);
+  // Calibration is for one controller's sticks, so it is never ticked for you
+  html += part('cal', 'Stick calibration (only if this file came from this same controller)', plan.cal ? 1 : 0, '', false);
+  if (!plan.settings.length && !plan.mapping.length && !plan.cal) html += '<p>Nothing to change: the controller already matches this file.</p>';
+  if (plan.skipped) {
+    html += `<p class="muted">Left out: ${plan.skipped} entr${plan.skipped === 1 ? 'y' : 'ies'} this controller doesn't have.</p>`;
+  }
+  html += `<div class="row"><button class="primary" data-act="apply" ${plan.settings.length || plan.mapping.length || plan.cal ? '' : 'disabled'}>Apply</button>
+    <button data-act="cancel">Cancel</button></div>`;
+  box.innerHTML = html;
+  box.classList.remove('hidden');
+  box.querySelector('[data-act=apply]').addEventListener('click', guard(() => applyPlan(plan)));
+  box.querySelector('[data-act=cancel]').addEventListener('click', closePlan);
+}
+
+function closePlan() {
+  $('file-preview').classList.add('hidden');
+  $('file-preview').innerHTML = '';
+}
+
+async function applyPlan(plan) {
+  const on = (k) => $('file-preview').querySelector(`[data-part=${k}]`)?.checked;
+  const bad = [];
+  let done = 0;
+  if (on('settings')) {
+    for (const c of plan.settings) {
+      const r = c.data
+        ? await call('SET_SETTING', { id: c.s.id, value: 0, points: c.data.length, data: c.data.concat(new Array(26 - c.data.length).fill(0)) })
+        : await call('SET_SETTING', { id: c.s.id, value: c.value });
+      if (r.status === 'OK') done++; else bad.push(`${c.s.name}${sideOf(c.s)} (${r.status})`);
+    }
+  }
+  if (on('mapping')) {
+    for (const m of plan.mapping) {
+      const r = await call('SET_REMAP', { source: m.i, target: m.t });
+      if (r.status === 'OK') done++; else bad.push(`${name(m.i)} mapping (${r.status})`);
+    }
+  }
+  if (on('cal') && plan.cal) {
+    const r = await call('CAL_SET', { min: plan.cal.min, centre: plan.cal.centre, max: plan.cal.max });
+    const s = r.status === 'OK' ? await call('CAL_SAVE') : r;
+    if (s.status === 'OK') { done++; setCal(s.fields); rememberCal(); } else bad.push(`calibration (${s.status})`);
+  }
+  closePlan();
+  if (hasFeat('SETTINGS')) await loadSettings();
+  if (hasFeat('REMAP')) await loadRemap();
+  if (hasFeat('CALIBRATION')) await loadCal();
+  note('file-msg', bad.length ? `Applied ${done}; refused: ${bad.join(', ')}.` : `Applied ${done} change${done === 1 ? '' : 's'}.`,
+       !bad.length);
+}
+
+async function loadFile(f) {
+  let file;
+  try { file = JSON.parse(await f.text()); } catch { note('file-msg', `${f.name} is not a settings file.`, false); return; }
+  if (file?.kind !== FILE_KIND || !Array.isArray(file.settings)) {
+    note('file-msg', `${f.name} is not a Thirst settings file.`, false);
+    return;
+  }
+  if (file.format > FILE_FORMAT) note('file-msg', 'This file is from a newer page; anything it doesn\'t understand is left out.', false);
+  showPlan(await planFile(file));
 }
 
 // ------------------------------------------------------------------ performance (Controller banner)
@@ -1142,6 +1461,18 @@ $('ft-revert').addEventListener('click', guard(async () => {
   note('ft-msg', 'Back to the saved calibration.', true);
 }));
 $('fault-clear').addEventListener('click', guard(async () => { await call('CLEAR_FAULT'); await loadFault(); }));
+$('st-profile').addEventListener('change', guard(() => useProfile(Number($('st-profile').value))));
+$('prof-rename').addEventListener('click', guard(renameProfile));
+$('prof-name').addEventListener('keydown', (e) => { if (e.key === 'Enter') guard(renameProfile)(); });
+$('prof-copy').addEventListener('click', guard(copyProfile));
+$('prof-reset').addEventListener('click', guard(resetProfile));
+$('file-save').addEventListener('click', guard(saveFile));
+$('file-load').addEventListener('click', () => $('file-pick').click());
+$('file-pick').addEventListener('change', guard(async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';   // so picking the same file again still fires
+  if (f) await loadFile(f);
+}));
 
 if (!('hid' in navigator)) {
   $('connect').disabled = true;
