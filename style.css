@@ -274,6 +274,7 @@ button.reset:not(:disabled):hover { color: var(--hot); }
 .editor .pt:hover, .editor .pt.drag { fill: var(--hot); }
 .editor .pt.fixed { cursor: default; stroke: #6b6e76; }
 .editor .ok-pt { fill: var(--ok); } .editor .bad-pt { fill: var(--bad); }
+.editor .part-pt { fill: none; stroke: var(--muted); stroke-width: 1.5; }   /* passed one way so far */
 .editor .lbl { fill: var(--muted); font: 11px Inter, sans-serif; }
 .editor .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px 16px; font-size: 12px; margin-top: 8px; }
 .editor .stats b { font: italic 600 15px "Exo 2", sans-serif; display: block; color: var(--ink); }

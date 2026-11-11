@@ -68,9 +68,10 @@ const INFO = {
     + 'after calibration, -100 to 100 %. Output: after shape, deadzone, curve, overshoot and clamp. Sent: the '
     + 'number the PC receives in the output mode in use (DualSense 0-255, XInput and DInput signed 16-bit at the '
     + 'chosen resolution).',
-  shape: 'How far each stick reaches in every direction. Measure shape: roll both sticks slowly round their edge, '
-    + 'then Finish; the controller then makes the reach a perfect circle. The shape it is given on top of that '
-    + 'is up to you: a circle, a square (diagonals reach full on both axes), or drag any point.',
+  shape: 'How far each stick reaches in each of 24 directions. Measure shape: roll both sticks slowly round their '
+    + 'edge, a few turns each way, then Finish; the points are then set from your stick so full tilt goes just past '
+    + '100 % in every direction (the headroom below). Turn Overshoot on to trim that to a perfect circle. Drag any '
+    + 'point to fine-tune, or pick a shape. The shape belongs to the stick, so it is the same in every profile.',
   curve: 'How the stick responds between centre and edge, for each stick. The straight line is linear. Lower '
     + 'points in the middle give finer control near centre; higher points a faster start. The orange dot is '
     + 'where the stick is now. The deadzone settings below apply before the curve.',
@@ -876,7 +877,7 @@ async function loadSettings() {
   $('sec-shape').classList.toggle('hidden', !shapes.length);
 
   // Groups shown beside what they belong to; everything else is Advanced
-  const PLACE = { Buttons: 'settings-buttons', Deadzone: 'settings-deadzone', Calibration: 'settings-cal' };
+  const PLACE = { Buttons: 'settings-buttons', Deadzone: 'settings-deadzone', Calibration: 'settings-cal', Shape: 'settings-shape' };
   const plain = infos.filter((x) => x.group !== 'Output' && typeOf(x) !== 'CURVE' && typeOf(x) !== 'SECTORS');
   for (const id of Object.values(PLACE)) $(id).innerHTML = '';
   for (const [g, id] of Object.entries(PLACE)) {

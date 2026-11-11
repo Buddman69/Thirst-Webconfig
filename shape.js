@@ -1,7 +1,8 @@
-// Stick shape: the target reach in 16 directions (drag the points or pick a preset), with the
-// measured reach from the rotation test and a live trace. 32768 = 100 %.
+// Stick shape: the reach in each direction (drag the points or pick a preset), with the
+// measured reach from the rotation test and a live trace. 32768 = 100 %. One layer: Measure
+// shape sets the points from the stick itself; dragging fine-tunes them.
 
-const N = 16;
+let N = 24;   // directions, from the controller's own setting (24 = 15 degrees apart)
 const C = 165;          // centre of the svg
 const S = 100;          // pixels per 100 %
 const MIN = 0.5;
@@ -39,8 +40,8 @@ const smoothPath = (p) => {
   return `${d}Z`;
 };
 
-// The target outline: a smooth closed curve through the 16 points (straight edges stay
-// straight), clipped to 100 % per axis
+// The outline: a smooth closed curve through the points (straight edges stay straight),
+// clipped to 100 % per axis
 const splinePath = (p) => {
   const P = p.map((r, k) => [Math.cos(ang(k)) * r, Math.sin(ang(k)) * r]);
   let d = '';
@@ -65,13 +66,14 @@ let testing = false;
 // call(cmd, args) -> reply; step(name) runs a CAL_STEP
 export function initShapes(host, infos, save, call, step, restore) {
   api = { call, step };
+  N = infos[0]?.data?.length || N;
   host.innerHTML = `<div class="row" style="margin-top:0">
       <button data-act="test" class="primary">Measure shape</button>
       <button data-act="done" disabled>Finish</button>
       <button data-act="cancel" disabled>Cancel</button>
       <button data-act="clear">Clear measurement</button>
-      <span class="muted small" data-out="status"></span>
     </div>
+    <p class="muted small" data-out="status" style="margin:8px 0 0"></p>
     <div class="editors" style="margin-top:12px"></div>`;
   const box = host.querySelector('.editors');
   editors = infos.map((s, i) => makeEditor(box, s, i, save, restore));
@@ -86,7 +88,7 @@ export function initShapes(host, infos, save, call, step, restore) {
 function makeEditor(box, setting, stick, save, restore) {
   const el = document.createElement('div');
   el.className = 'editor';
-  const ed = { stick, setting, tgt: setting.data.map((v) => v / 32768), trace: [], reach: null, covered: 0, saved: 0 };
+  const ed = { stick, setting, tgt: setting.data.map((v) => v / 32768), trace: [], reach: null, covered: 0, started: 0, measured: 0 };
   el.innerHTML = `<div class="row" style="margin-top:0;justify-content:space-between">
       <h3 style="margin:0">${stick ? 'Right stick' : 'Left stick'}</h3>
     </div>
@@ -115,7 +117,7 @@ function makeEditor(box, setting, stick, save, restore) {
       <div>Directions changed<b data-s="adj">-</b></div>
     </div>
     <p class="muted small" style="margin:6px 0 0">Dashed: 100 %. Grey: how far the stick really reaches (green within ±5 % of round).
-      Orange: the shape it is given. Drag a point in or out.</p>`;
+      Orange: the reach it is given in each direction; Measure shape sets it from the stick. Drag a point in or out.</p>`;
   box.appendChild(el);
   const svg = el.querySelector('svg');
   const q = (s) => el.querySelector(s);
@@ -139,15 +141,19 @@ function makeEditor(box, setting, stick, save, restore) {
       return;
     }
     const v = r.map((x) => x / 32768);
-    const have = v.map((x, k) => x > 0 && (testing ? (ed.covered >> k) & 1 : (ed.saved >> k) & 1));
-    q('.measured').setAttribute('d', have.every(Boolean) ? smoothPath(v) : '');
+    // during the test: started = passed at least once (hollow), covered = done both ways (solid)
+    const done = (k) => (testing ? (ed.covered >>> k) & 1 : ed.measured);
+    const seen = (k) => (testing ? (ed.started >>> k) & 1 : ed.measured);
+    const have = v.map((x, k) => x > 0 && seen(k));
+    q('.measured').setAttribute('d', v.every((x, k) => x > 0 && done(k)) ? smoothPath(v) : '');
     q('.mpts').innerHTML = v.map((x, k) => {
       if (!have[k]) return '';
       const [px, py] = pt(x, ang(k));
-      return `<circle class="${Math.abs(x - 1) <= 0.05 ? 'ok-pt' : 'bad-pt'}" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.5"/>`;
+      const cls = Math.abs(x - 1) <= 0.05 ? 'ok-pt' : 'bad-pt';
+      return `<circle class="${cls}${done(k) ? '' : ' part-pt'}" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="3.5"/>`;
     }).join('');
-    const n = have.filter(Boolean).length;
-    q('[data-s=cov]').textContent = `${n}/${N}${testing ? '' : ' saved'}`;
+    const n = v.filter((x, k) => x > 0 && done(k)).length;
+    q('[data-s=cov]').textContent = testing ? `${n}/${N} done` : `${n}/${N} saved`;
     const got = v.filter((x, k) => have[k]);
     q('[data-s=err]').textContent = got.length ? `±${(Math.max(...got.map((x) => Math.abs(x - 1))) * 100).toFixed(1)} %` : '-';
   };
@@ -213,21 +219,25 @@ function makeEditor(box, setting, stick, save, restore) {
 async function refresh() {
   for (const ed of editors) {
     const r = (await api.call('GET_SHAPE', { stick: ed.stick })).fields;
-    ed.reach = r.reach;
+    ed.reach = Array.from(r.reach);
     ed.covered = r.covered;
-    ed.saved = r.saved;
+    ed.started = r.started;
+    ed.measured = r.measured;
     ed.drawMeasured();
   }
   const status = api.host.querySelector('[data-out=status]');
   if (testing) {
     const n = editors.map((e) => bits(e.covered));
-    status.textContent = `Roll both sticks slowly round their edge. Reached: left ${n[0]}/${N}, right ${n[1]}/${N}.`
+    status.textContent = 'Roll both sticks slowly round their edge, both ways: a few turns clockwise, then a few '
+      + `anticlockwise. Each direction needs passing twice each way. Done: left ${n[0]}/${N}, right ${n[1]}/${N}.`
       + (n.every((x) => x === N) ? ' Both done: press Finish.' : '');
   } else {
-    status.textContent = '';
+    status.textContent = 'Measure shape sets each direction from the stick so full tilt goes just past 100 % '
+      + 'everywhere; Overshoot then trims it to exactly what you want. The shape belongs to the stick, so it is '
+      + 'the same in every profile.';
   }
 }
-const bits = (v) => v.toString(2).split('').filter((c) => c === '1').length;
+const bits = (v) => { let n = 0; for (let k = 0; k < N; k++) n += (v >>> k) & 1; return n; };
 
 // The controller's calibration state: the test runs while it is SHAPE
 export function shapeCalState(st) {
@@ -242,6 +252,19 @@ export function shapeCalState(st) {
   if (testing && !polling) polling = setInterval(() => refresh().catch(() => {}), 200);
   if (!testing && polling) { clearInterval(polling); polling = null; }
   if (was !== testing) refresh().catch(() => {});
+  // A finished measurement rewrites the shape points on the controller: show them
+  if (was && !testing) setTimeout(() => reloadPoints().catch(() => {}), 400);
+}
+
+async function reloadPoints() {
+  for (const ed of editors) {
+    const g = (await api.call('GET_SETTING', { id: ed.setting.id })).fields;
+    const d = Array.from(g.data).slice(0, g.points);
+    if (d.length !== N) continue;
+    ed.setting.data = d;
+    ed.tgt = d.map((v) => v / 32768);
+    ed.draw();
+  }
 }
 
 export function shapeLive(s) {
