@@ -201,6 +201,11 @@ th:first-child, td:first-child { text-align: left; }
 #remap { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); column-gap: 28px; }
 #remap > .row { grid-column: 1 / -1; }
 .map-group > .group:first-child { margin-top: 4px; }
+.bind-pill { justify-self: stretch; text-align: left; font-weight: 500; }
+.bind-capture { padding: 8px 0 12px; }
+.bind-target { border: 1px dashed var(--hot); border-radius: 3px; padding: 14px; text-align: center; font-size: 13px;
+               color: var(--ink); cursor: pointer; user-select: none; background: #0a0b0e; }
+.bind-target:focus { outline: 1px solid var(--hot); }
 .map-row { display: grid; grid-template-columns: 1fr 1.4fr auto; gap: 8px; align-items: center; padding: 7px 0;
            border-bottom: 1px solid var(--line); }
 

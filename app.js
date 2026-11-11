@@ -7,11 +7,13 @@ import {
 import { buildPad, drawPad } from './pad.js';
 import { initCurves, curveLive } from './curve.js';
 import { initShapes, shapeCalState, shapeLive } from './shape.js';
+import { initBinds, tbName, bindLabel, bindsForFile, planBinds } from './binds.js';
 
 const DEVICES = [
   { vendorId: 0x054C, productId: 0x0CE6, usagePage: HID_USAGE_PAGE },  // DualSense output mode
   { vendorId: 0x1209, productId: 0x0001, usagePage: HID_USAGE_PAGE },  // DInput output mode
   { vendorId: 0x1209, productId: 0x0002, usagePage: HID_USAGE_PAGE },  // XInput output mode
+  { vendorId: 0x1209, productId: 0x0003, usagePage: HID_USAGE_PAGE },  // trackball (keyboard + mouse)
 ];
 const REMAP_NONE = 253;
 const REMAP_SELF = 254;
@@ -33,7 +35,7 @@ const CAL_TEXT = {
   SHAPE: 'Measuring the stick shape: roll both sticks round their edge (see Stick shape).',
 };
 
-const MODE_NAME = { DUALSENSE: 'DualSense', DINPUT: 'DInput', XINPUT: 'XInput (Xbox 360)' };
+const MODE_NAME = { DUALSENSE: 'DualSense', DINPUT: 'DInput', XINPUT: 'XInput (Xbox 360)', KBM: 'Keyboard + mouse' };
 
 // What each (i) beside a section or figure explains. General help only: settings explain
 // themselves through the controller (SETTING_HELP).
@@ -50,6 +52,10 @@ const INFO = {
   live: 'What the controller is sending right now. The dots are the sticks; the bars are L2 and R2. A filled '
     + 'button is what the PC sees; an outlined one is physically pressed. So a back button mapped to Cross '
     + 'outlines Back 1 and fills Cross.',
+  binds: 'Choose what each button presses, for the profile in use: a key, a mouse button, or nothing. Click a '
+    + 'binding, then press the key on your keyboard or click with the mouse button you want; keys that are hard to '
+    + 'press (F13-F24, the Windows keys) are in the list. A change saves on the controller straight away; Default '
+    + 'puts back the controller\'s own binding.',
   remap: 'Choose what each button presses, for the profile in use. "Itself" sends the button as it is; "Nothing" '
     + 'switches it off; any other button swaps it (two buttons can trade places). A change saves on the controller '
     + 'straight away; Default puts back the board\'s own mapping. FN always stays FN.',
@@ -92,7 +98,10 @@ const INFO = {
 };
 
 const $ = (id) => document.getElementById(id);
-const name = (i) => FRIENDLY[ENUMS.button[i]] ?? ENUMS.button[i] ?? `#${i}`;
+// Which controller is connected: its buttons are named from its own list
+let product = 'STICKS';
+const btnEnum = () => (product === 'TRACKBALL' ? ENUMS.tb_button : ENUMS.button);
+const name = (i) => (product === 'TRACKBALL' ? tbName(i) : FRIENDLY[ENUMS.button[i]] ?? ENUMS.button[i] ?? `#${i}`);
 
 let dev = null;
 let seq = 0;
@@ -139,13 +148,16 @@ async function connect(d) {
   const f = hello.fields;
   const has = (feat) => (f.features >> ENUMS.feature.indexOf(feat)) & 1;
   feats = f.features;
+  product = ENUMS.product?.[f.product] ?? 'STICKS';
   $('status').textContent = `Connected: ${f.board}, firmware ${f.firmware}`;
   $('st-board').textContent = f.board;
   $('st-fw').textContent = f.firmware;
   showMode(f.output_mode, has('MODE'));
   $('st-fw').title = `config protocol v${f.protocol}, frame v${f.frame_version}`;
   for (const id of ['st-poll', 'st-miss', 'st-delay']) $(id).closest('.stat').classList.toggle('hidden', !has('STATS'));
-  $('sec-remap').classList.toggle('hidden', !has('REMAP'));
+  $('sec-remap').classList.toggle('hidden', !has('REMAP') && !has('BINDS'));
+  $('remap-title').textContent = has('BINDS') ? 'Button bindings' : 'Button mapping';
+  $('sec-remap').querySelector('h2 .info').dataset.info = has('BINDS') ? 'binds' : 'remap';
   $('sec-cal').classList.toggle('hidden', !has('CALIBRATION'));
   $('sec-settings').classList.toggle('hidden', !has('SETTINGS'));
   $('sec-fault').classList.toggle('hidden', !has('FAULT'));
@@ -161,6 +173,7 @@ async function connect(d) {
   buildFinetune();
   renderHistory();
   if (has('REMAP')) await loadRemap();
+  if (has('BINDS')) await loadBinds();
   if (has('CALIBRATION')) await loadCal();
   if (has('SETTINGS')) await loadSettings();
   if (has('FAULT')) await loadFault();
@@ -195,10 +208,16 @@ async function disconnect() {
 // ------------------------------------------------------------------ live input
 
 function buildChips() {
-  buildPad($('pad'), ENUMS.button);
-  $('chips').innerHTML = ENUMS.button
+  // The controller drawing is a gamepad's; a keyboard-and-mouse controller shows its buttons only
+  $('pad').classList.toggle('hidden', product === 'TRACKBALL');
+  if (product !== 'TRACKBALL') buildPad($('pad'), ENUMS.button);
+  $('chips').innerHTML = btnEnum()
     .map((b, i) => `<span class="chip" data-i="${i}">${escapeHtml(name(i))}</span>`).join('');
   buildAxisTable();
+}
+
+async function loadBinds() {
+  await initBinds($('remap'), call, (t, ok) => note('remap-msg', t, ok), guard);
 }
 
 // The analog pipeline per axis: raw reading, after calibration, what the shaping stages send,
@@ -208,7 +227,8 @@ const AXES = [['LX', 0, false], ['LY', 1, true], ['RX', 2, false], ['RY', 3, tru
 function buildAxisTable() {
   $('axis-table').innerHTML = `<tr><th>Input</th><th>Raw</th><th>Calibrated</th><th>Output</th><th>Sent</th></tr>`
     + AXES.map(([n]) => `<tr data-a="${n}"><td>${n}</td><td></td><td></td><td></td><td class="hot"></td></tr>`).join('')
-    + ['L2', 'R2'].map((n) => `<tr data-t="${n}"><td>${n}</td><td>-</td><td></td><td></td><td class="hot"></td></tr>`).join('');
+    + (product === 'TRACKBALL' ? ''   // no triggers
+      : ['L2', 'R2'].map((n) => `<tr data-t="${n}"><td>${n}</td><td>-</td><td></td><td></td><td class="hot"></td></tr>`).join(''));
 }
 
 const pct = (v) => `${(v / 327.67).toFixed(1)} %`;
@@ -240,6 +260,7 @@ function drawAxisTable(s) {
   }
   ['L2', 'R2'].forEach((n, i) => {
     const tr = $('axis-table').querySelector(`[data-t="${n}"]`);
+    if (!tr) return;
     const bit = ENUMS.button.indexOf(n);
     const pressed = bit >= 0 && ((s.buttons >>> bit) & 1) === 1;
     const v = pressed ? 32767 : Math.max(0, s.trigger[i]);
@@ -250,7 +271,7 @@ function drawAxisTable(s) {
 }
 
 function drawLive(s) {
-  drawPad(s, ENUMS.button);
+  if (product !== 'TRACKBALL') drawPad(s, ENUMS.button);
   drawAxisTable(s);
   for (const c of $('chips').children) {
     const bit = 1 << Number(c.dataset.i);
@@ -692,7 +713,8 @@ const keys = new Set();
 const KEYMAP = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
 
 function padPressed(s) {
-  const b = (n) => (s.buttons_raw >> ENUMS.button.indexOf(n)) & 1;
+  // A keyboard-and-mouse controller's buttons are keys: its D-pad already arrives as arrow keys
+  const b = (n) => (product === 'TRACKBALL' ? 0 : (s.buttons_raw >> ENUMS.button.indexOf(n)) & 1);
   return {
     left: b('DPAD_LEFT') || b('SQUARE') || keys.has('left'),
     right: b('DPAD_RIGHT') || b('CIRCLE') || keys.has('right'),
@@ -1107,6 +1129,7 @@ function renderProfiles() {
 async function reloadProfileView() {
   if (hasFeat('SETTINGS')) await loadSettings();
   if (hasFeat('REMAP')) await loadRemap();
+  if (hasFeat('BINDS')) await loadBinds();
 }
 
 async function useProfile(i) {
@@ -1204,6 +1227,7 @@ async function buildFile() {
       if (ENUMS.button[i] && v) file.mapping[ENUMS.button[i]] = v;
     });
   }
+  if (hasFeat('BINDS')) file.binds = await bindsForFile(call);
   if ($('file-cal').checked && hasFeat('CALIBRATION') && cal) {
     file.calibration = { bits: 16, min: [...cal.min], centre: [...cal.centre], max: [...cal.max] };
   }
@@ -1276,6 +1300,12 @@ async function planFile(file) {
       if (active[i] !== t) plan.mapping.push({ i, t, was: active[i] });
     }
   }
+  plan.binds = [];
+  if (file.binds && typeof file.binds === 'object' && hasFeat('BINDS')) {
+    const pb = await planBinds(file.binds, call);
+    plan.binds = pb.changes;
+    plan.skipped += pb.skipped;
+  }
   const c = file.calibration;
   if (c && hasFeat('CALIBRATION') && cal) {
     const n = cal.min.length;
@@ -1301,13 +1331,16 @@ function showPlan(plan) {
     plan.settings.map((c) => `<li><b>${escapeHtml(c.s.name)}${escapeHtml(sideOf(c.s))}</b>: ${val(c)}</li>`).join(''), true);
   html += part('mapping', `Button mapping: ${plan.mapping.length} different`, plan.mapping.length,
     plan.mapping.map((m) => `<li><b>${escapeHtml(name(m.i))}</b>: ${escapeHtml(mapName(m.was))} → ${escapeHtml(mapName(m.t))}</li>`).join(''), true);
+  html += part('binds', `Button bindings: ${plan.binds.length} different`, plan.binds.length,
+    plan.binds.map((m) => `<li><b>${escapeHtml(name(m.i))}</b>: ${escapeHtml(bindLabel(m.was))} → ${escapeHtml(bindLabel(m.b))}</li>`).join(''), true);
   // Calibration is for one controller's sticks, so it is never ticked for you
   html += part('cal', 'Stick calibration (only if this file came from this same controller)', plan.cal ? 1 : 0, '', false);
-  if (!plan.settings.length && !plan.mapping.length && !plan.cal) html += '<p>Nothing to change: the controller already matches this file.</p>';
+  const any = plan.settings.length || plan.mapping.length || plan.binds.length || plan.cal;
+  if (!any) html += '<p>Nothing to change: the controller already matches this file.</p>';
   if (plan.skipped) {
     html += `<p class="muted">Left out: ${plan.skipped} entr${plan.skipped === 1 ? 'y' : 'ies'} this controller doesn't have.</p>`;
   }
-  html += `<div class="row"><button class="primary" data-act="apply" ${plan.settings.length || plan.mapping.length || plan.cal ? '' : 'disabled'}>Apply</button>
+  html += `<div class="row"><button class="primary" data-act="apply" ${any ? '' : 'disabled'}>Apply</button>
     <button data-act="cancel">Cancel</button></div>`;
   box.innerHTML = html;
   box.classList.remove('hidden');
@@ -1338,6 +1371,12 @@ async function applyPlan(plan) {
       if (r.status === 'OK') done++; else bad.push(`${name(m.i)} mapping (${r.status})`);
     }
   }
+  if (on('binds')) {
+    for (const m of plan.binds) {
+      const r = await call('SET_BIND', { source: m.i, bind: m.b });
+      if (r.status === 'OK') done++; else bad.push(`${name(m.i)} binding (${r.status})`);
+    }
+  }
   if (on('cal') && plan.cal) {
     const r = await call('CAL_SET', { min: plan.cal.min, centre: plan.cal.centre, max: plan.cal.max });
     const s = r.status === 'OK' ? await call('CAL_SAVE') : r;
@@ -1346,6 +1385,7 @@ async function applyPlan(plan) {
   closePlan();
   if (hasFeat('SETTINGS')) await loadSettings();
   if (hasFeat('REMAP')) await loadRemap();
+  if (hasFeat('BINDS')) await loadBinds();
   if (hasFeat('CALIBRATION')) await loadCal();
   note('file-msg', bad.length ? `Applied ${done}; refused: ${bad.join(', ')}.` : `Applied ${done} change${done === 1 ? '' : 's'}.`,
        !bad.length);
