@@ -51,8 +51,6 @@ export function curveFn(xs, ys, ws = []) {
   };
 }
 
-// Kept for anything still calling the old name: every point fully smooth
-export const monotone = (xs, ys) => curveFn(xs, ys);
 
 // Wire format <-> points
 export function decodeCurve(data) {
@@ -181,6 +179,22 @@ function makeEditor(box, setting, title, save, restore) {
           <b data-f="wv" style="min-width:16px">${ed.ws[i]}</b></label>
         <button data-f="remove">Remove point</button>`}
       </div>`;
+    // The mouse wheel moves the smoothness slider a step a notch; saved once the wheel stops
+    const w = panel.querySelector('[data-f=w]');
+    if (w) {
+      let timer = null;
+      w.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const v = Math.min(10, Math.max(1, Number(w.value) + (e.deltaY < 0 ? 1 : -1)));
+        if (v === Number(w.value)) return;
+        w.value = String(v);
+        ed.ws[ed.sel] = v;
+        panel.querySelector('[data-f=wv]').textContent = String(v);
+        drawCurve();
+        clearTimeout(timer);
+        timer = setTimeout(() => { ed.commit(); }, 350);
+      }, { passive: false });
+    }
   }
 
   function draw() { drawCurve(); drawPanel(); }

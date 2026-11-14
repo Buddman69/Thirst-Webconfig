@@ -7,7 +7,8 @@ import {
 import { buildPad, drawPad } from './pad.js';
 import { initCurves, curveLive } from './curve.js';
 import { initShapes, shapeCalState, shapeLive } from './shape.js';
-import { initBinds, tbName, bindLabel, bindsForFile, planBinds } from './binds.js';
+import { initBinds, tbName, bindLabel, bindsForFile, planBinds, captureBinding } from './binds.js';
+import { bezierEditor } from './bezier.js';
 
 const DEVICES = [
   { vendorId: 0x054C, productId: 0x0CE6, usagePage: HID_USAGE_PAGE },  // DualSense output mode
@@ -40,6 +41,8 @@ const MODE_NAME = { DUALSENSE: 'DualSense', DINPUT: 'DInput', XINPUT: 'XInput (X
 // What each (i) beside a section or figure explains. General help only: settings explain
 // themselves through the controller (SETTING_HELP).
 const INFO = {
+  tblive: 'What the trackball reads now: its tilt and gyro, each touch pad, and whether the aim page is in use (LT held). '
+    + 'Zero the gyro with the controller still, held the way you play: it learns the gyro\'s drift and what "level" is.',
   controller: 'Which controller is connected and how it is performing right now. The figures update every '
     + 'second and are measured inside the controller.',
   polling: 'How many reports per second your PC is actually collecting from the controller. It should match '
@@ -149,6 +152,9 @@ async function connect(d) {
   const has = (feat) => (f.features >> ENUMS.feature.indexOf(feat)) & 1;
   feats = f.features;
   product = ENUMS.product?.[f.product] ?? 'STICKS';
+  // The Trackball tab: only on the trackball
+  $('tab-trackball-btn').classList.toggle('hidden', product !== 'TRACKBALL');
+  if (product !== 'TRACKBALL' && document.querySelector('#tabs button.active')?.dataset.tab === 'trackball') showTab('home');
   $('status').textContent = `Connected: ${f.board}, firmware ${f.firmware}`;
   $('st-board').textContent = f.board;
   $('st-fw').textContent = f.firmware;
@@ -947,7 +953,19 @@ async function loadSettings() {
     s.value = g.value;
     s.data = Array.from(g.data ?? []).slice(0, g.points ?? 0);
   }
+  // How to show each one (SETTING_UI) and its named choices: from the controller, not this page
+  for (let i = 0; i < infos.length; i++) {
+    const s = infos[i];
+    s.index = i;
+    const u = (await call('SETTING_UI', { index: i })).fields;
+    s.ui = { parent: u.parent ?? 0, flags: u.flags ?? 0, options: [] };
+    for (let n = 0; n < (u.options ?? 0); n++) {
+      s.ui.options.push((await call('SETTING_OPTION', { id: s.id, n })).fields.label);
+    }
+  }
   allSettings = infos;
+  settingById = new Map(infos.map((x) => [x.id, x]));
+  masters = new Set(infos.map((x) => x.ui.parent).filter(Boolean));
 
   // The Output group sits in the Controller panel, beside the output mode it goes with
   const out = $('st-output');
@@ -981,30 +999,147 @@ async function loadSettings() {
   $('sec-shape').classList.toggle('hidden', !shapes.length);
 
   // Groups shown beside what they belong to; everything else is Advanced
-  const PLACE = { Buttons: 'settings-buttons', Deadzone: 'settings-deadzone', Calibration: 'settings-cal', Shape: 'settings-shape' };
+  const PLACE = { Buttons: 'settings-buttons', Deadzone: 'settings-deadzone', Invert: 'settings-deadzone', Calibration: 'settings-cal', Shape: 'settings-shape' };
   const plain = infos.filter((x) => x.group !== 'Output' && typeOf(x) !== 'CURVE' && typeOf(x) !== 'SECTORS');
   for (const id of Object.values(PLACE)) $(id).innerHTML = '';
   for (const [g, id] of Object.entries(PLACE)) {
     const mine = plain.filter((x) => x.group === g);
     if (mine.length) renderColumns($(id), mine, false);
   }
-  renderColumns(box, plain.filter((x) => !PLACE[x.group]), true);
+  // The trackball's own groups (and Stick aim, which on the trackball is its joystick's) go on
+  // the Trackball tab, one panel per group
+  const ownTab = (x) => (x.ui.flags & 8) !== 0;
+  renderTrackball(plain.filter(ownTab));
+  // A stick's curve type, and what hangs off it, live in that stick's curve editor (Points |
+  // Bezier), not here
+  const types = curves.length ? plain.filter((x) => x.ui.flags & 4) : [];
+  const typeIds = new Set(types.map((x) => x.id));
+  const inCurve = (x) => typeIds.has(x.id) || typeIds.has(x.ui.parent);
+  if (types.length) curveTypeSwitch(plain, types);
+  renderColumns(box, plain.filter((x) => !PLACE[x.group] && !ownTab(x) && !inCurve(x)), true);
+  refreshActive();
+}
+
+// ------------------------------------------------------------------ inactive sections
+// A setting is inactive while the switch it depends on (SETTING_UI.parent), or any switch above
+// that, is at its lowest value: off, "Off", "Points", 0. It is greyed; the switch says so.
+
+let settingById = new Map();
+let masters = new Set();
+
+function isActive(s) {
+  for (let p = settingById.get(s.ui?.parent), n = 0; p && n < 8; p = settingById.get(p.ui?.parent), n++) {
+    if (p.value === p.min) return false;
+  }
+  return true;
+}
+
+function refreshActive() {
+  document.querySelectorAll('[data-sid]').forEach((el) => {
+    const s = settingById.get(Number(el.dataset.sid));
+    if (!s) return;
+    el.classList.toggle('inactive', !isActive(s));
+    const tag = el.querySelector(':scope > .name .inactive-tag, :scope .inactive-tag');
+    if (tag) tag.classList.toggle('hidden', !(masters.has(s.id) && s.value === s.min));
+  });
+}
+
+// Each stick's curve editor: Points or Bezier (with axial lock). Switching
+// sets the stick's curve type; the editor shows the one in use.
+function curveTypeSwitch(infos, types) {
+  const eds = $('curve-editor').querySelectorAll('.editor');
+  ['LEFT', 'RIGHT'].forEach((side, i) => {
+    const ed = eds[i];
+    const type = types.find((x) => ENUMS.setting_scope?.[x.scope] === side);
+    if (!ed || !type) return;
+    const parts = [...ed.children].slice(1);	// all but the title row
+    const preset = ed.querySelector('select[aria-label="Curve preset"]');
+    const list = infos.filter((x) => x.ui.parent === type.id);	// in the controller's order
+    const bez = document.createElement('div');
+    bez.className = 'bez-panel';
+    appendSettings(bez, list);
+    bez.insertAdjacentHTML('beforeend', '<p class="muted small" style="margin:6px 0 0">Drag the curve\'s two handles. '
+      + 'Axial lock pulls the stick toward the nearest axis as it is pushed further.</p>');
+    const sw = document.createElement('div');
+    sw.className = 'row curve-type';
+    sw.innerHTML = '<span class="muted">Curve:</span><button data-t="0">Points</button><button data-t="1">Bezier</button>';
+    ed.children[0].after(sw);
+    ed.appendChild(bez);
+    const show = () => {
+      const b = type.value === 1;
+      for (const el of parts) el.classList.toggle('hidden', b);
+      preset?.classList.toggle('hidden', b);
+      bez.classList.toggle('hidden', !b);
+      sw.querySelectorAll('button').forEach((x) => {
+        const on = Number(x.dataset.t) === type.value;
+        x.classList.toggle('active', on);
+        x.setAttribute('aria-pressed', String(on));
+      });
+    };
+    sw.querySelectorAll('button').forEach((x) => x.addEventListener('click', guard(async () => {
+      await setSetting(type, Number(x.dataset.t));
+      show();
+    })));
+    show();
+  });
+}
+
+// One panel per group on the Trackball tab, in contract order; Bezier handles as editors
+function renderTrackball(list) {
+  const host = $('tb-settings');
+  host.innerHTML = '';
+  for (const g of [...new Set(list.map((x) => x.group))]) {
+    const sec = document.createElement('section');
+    sec.className = 'panel tb-group';
+    sec.innerHTML = `<h2>${escapeHtml(g)}</h2>`;
+    const body = document.createElement('div');
+    body.className = 'tb-body';
+    appendSettings(body, list.filter((x) => x.group === g));
+    sec.appendChild(body);
+    host.appendChild(sec);
+  }
+}
+
+// Settings as rows, except each Bezier's four handle settings, which become one editor
+function appendSettings(box, list) {
+  // SETTING_UI flag bit 1: this and the next three settings are one Bezier's handles
+  const quads = new Map();
+  for (const x of list) {
+    if (x.ui?.flags & 2) {
+      const q = [0, 1, 2, 3].map((k) => allSettings[x.index + k]);
+      if (q.every(Boolean)) quads.set(x, q);
+    }
+  }
+  const inQuad = new Set([...quads.values()].flat());
+  for (const x of list) {
+    if (quads.has(x)) {
+      const title = x.name.replace(/ x1$/, '');
+      const ed = bezierEditor(escapeHtml(title), quads.get(x), (st, v) => setSetting(st, v));
+      ed.dataset.sid = x.id;
+      box.appendChild(ed);
+    } else if (!inQuad.has(x)) {
+      box.appendChild(settingRow(x));
+    }
+  }
 }
 
 // Settings in Left stick / Right stick / Controller columns, one heading per group
 function renderColumns(box, list, headings) {
-  const cols = { LEFT: 'Left stick', RIGHT: 'Right stick', ALL: 'Controller' };
+  // With headings (the Advanced tab): Controller first, across the full width, then the two
+  // sticks side by side under it
+  const cols = headings ? { ALL: 'Controller', LEFT: 'Left stick', RIGHT: 'Right stick' }
+    : { LEFT: 'Left stick', RIGHT: 'Right stick', ALL: 'Controller' };
   for (const [scope, title] of Object.entries(cols)) {
     const mine = list.filter((x) => (ENUMS.setting_scope?.[x.scope] ?? 'ALL') === scope);
     if (!mine.length && !headings) continue;
     const col = document.createElement('div');
-    col.className = 'scol';
+    col.className = headings && scope === 'ALL' ? 'scol full' : 'scol';
     col.innerHTML = `<h3>${title}</h3>`;
     if (!mine.length) col.insertAdjacentHTML('beforeend', '<p class="muted">Nothing here.</p>');
     const groups = [...new Set(mine.map((x) => x.group))];
     for (const g of groups) {
       if (headings || groups.length > 1) col.insertAdjacentHTML('beforeend', `<div class="group">${escapeHtml(g)}</div>`);
-      for (const x of mine.filter((y) => y.group === g)) col.appendChild(settingRow(x));
+      appendSettings(col, mine.filter((y) => y.group === g));
     }
     box.appendChild(col);
   }
@@ -1045,9 +1180,11 @@ function showModeNotes() {
 function settingRow(s) {
   const row = document.createElement('div');
   row.className = 'setting';
-  const allp = profiles && !s.profile ? '<span class="allp" title="The same in every profile">all profiles</span>' : '';
+  row.dataset.sid = s.id;
+  const allp = profiles && !(s.profile & 1) ? '<span class="allp" title="The same in every profile">all profiles</span>' : '';
   row.innerHTML = `<div class="name">${escapeHtml(s.name)}${allp}
-      <button class="info" data-setting="${s.id}" aria-label="About ${escapeHtml(s.name)}">i</button></div>`;
+      <button class="info" data-setting="${s.id}" aria-label="About ${escapeHtml(s.name)}">i</button>
+      ${masters.has(s.id) ? '<span class="inactive-tag hidden">inactive</span>' : ''}</div>`;
   row.appendChild(settingControl(s));
   const def = document.createElement('div');
   def.className = 'muted def';
@@ -1076,6 +1213,8 @@ function resetButton(s, redraw) {
 // INT values are stored scaled: show value / 10^decimals
 function showValue(s, v) {
   if (ENUMS.setting_type[s.type] === 'BOOL') return v ? 'on' : 'off';
+  if (s.ui?.options.length) return s.ui.options[v - s.min] ?? String(v);
+  if (s.ui?.flags & 1) return bindLabel(v);
   return `${(v / 10 ** (s.decimals || 0)).toFixed(s.decimals || 0)}${s.unit ? ' ' + s.unit : ''}`;
 }
 
@@ -1083,6 +1222,23 @@ function settingControl(s) {
   const type = ENUMS.setting_type[s.type];
   const cell = document.createElement('div');
   cell.className = 'ctl';
+  if (s.ui?.options.length) {
+    // Named choices (SETTING_OPTION): a list
+    cell.innerHTML = `<select aria-label="${escapeHtml(s.name)}">${s.ui.options.map((o, k) =>
+      `<option value="${s.min + k}" ${s.min + k === s.value ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('')}</select>`;
+    cell.querySelector('select').addEventListener('change', (e) => setSetting(s, Number(e.target.value)));
+    return cell;
+  }
+  if (s.ui?.flags & 1) {
+    // A key or mouse button: press it, or pick it from the list
+    cell.innerHTML = `<button class="bind-pill" title="Change ${escapeHtml(s.name)}">${escapeHtml(bindLabel(s.value))}</button>`;
+    const pill = cell.querySelector('button');
+    pill.addEventListener('click', () => captureBinding(cell.closest('.setting') ?? cell, s.name, async (b) => {
+      await setSetting(s, b);
+      pill.textContent = bindLabel(s.value);
+    }));
+    return cell;
+  }
   if (type === 'BOOL') {
     cell.innerHTML = `<input type="checkbox" ${s.value ? 'checked' : ''} aria-label="${escapeHtml(s.name)}">`;
     cell.querySelector('input').addEventListener('change', (e) => setSetting(s, e.target.checked ? 1 : 0));
@@ -1101,10 +1257,29 @@ function settingControl(s) {
     const val = cell.querySelector('.val');
     range.addEventListener('input', () => { val.textContent = showValue(s, Number(range.value)); });
     range.addEventListener('change', () => setSetting(s, Number(range.value)));
+    wheelSlider(range, () => { val.textContent = showValue(s, Number(range.value)); }, () => setSetting(s, Number(range.value)));
   } else {
     cell.innerHTML = `<span class="muted">${escapeHtml(type ?? '?')}: editor coming</span>`;
   }
   return cell;
+}
+
+// The mouse wheel moves a slider over it: 1 % of its travel a notch, Shift for the finest step.
+// It saves once the wheel stops (so a long scroll is one save, not dozens).
+export function wheelSlider(range, onMove, onDone) {
+  let timer = null;
+  range.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const lo = Number(range.min);
+    const hi = Number(range.max);
+    const fine = Number(range.step) || 1;
+    const step = e.shiftKey ? fine : Math.max(fine, Math.round((hi - lo) / 100));
+    const dir = e.deltaY < 0 ? 1 : -1;
+    range.value = String(Math.min(hi, Math.max(lo, Number(range.value) + dir * step)));
+    onMove();
+    clearTimeout(timer);
+    timer = setTimeout(onDone, 350);
+  }, { passive: false });
 }
 
 async function setSetting(s, value) {
@@ -1112,6 +1287,7 @@ async function setSetting(s, value) {
   const side = { LEFT: ' (left stick)', RIGHT: ' (right stick)' }[ENUMS.setting_scope?.[s.scope]] ?? '';
   if (r.status === 'OK') s.value = value;
   s.onChange?.();
+  if (masters.has(s.id)) refreshActive();
   if (s === outBitsSetting) updateDispBits();
   note('settings-msg', r.status === 'OK' ? `${s.name}${side}: saved.` : `${s.name}${side}: refused (${r.status}).`,
        r.status === 'OK');
@@ -1234,7 +1410,10 @@ let allSettings = [];
 let feats = 0;
 const hasFeat = (f) => (feats >> ENUMS.feature.indexOf(f)) & 1;
 const FILE_KIND = 'thirst-config';
-const FILE_FORMAT = 1;
+// 2: values as the controller shows them (most settings as a percentage, SETTING_INFO.profile
+// bit 1). A format 1 file has real values for those, which only the controller could convert:
+// they are left out when it is loaded.
+const FILE_FORMAT = 2;
 const scopeOf = (s) => ENUMS.setting_scope?.[s.scope] ?? 'ALL';
 const sideOf = (s) => ({ LEFT: ' (left stick)', RIGHT: ' (right stick)' }[scopeOf(s)] ?? '');
 const isData = (s) => ['CURVE', 'SECTORS'].includes(ENUMS.setting_type[s.type]);
@@ -1259,7 +1438,10 @@ async function buildFile() {
       if (ENUMS.button[i] && v) file.mapping[ENUMS.button[i]] = v;
     });
   }
-  if (hasFeat('BINDS')) file.binds = await bindsForFile(call);
+  if (hasFeat('BINDS')) {
+    file.binds = await bindsForFile(call);
+    file.binds_aim = await bindsForFile(call, 1);	// the aim page (LT held): what differs only
+  }
   if ($('file-cal').checked && hasFeat('CALIBRATION') && cal) {
     file.calibration = { bits: 16, min: [...cal.min], centre: [...cal.centre], max: [...cal.max] };
   }
@@ -1311,9 +1493,11 @@ async function saveFile() {
 async function planFile(file) {
   const byId = new Map(allSettings.map((s) => [s.id, s]));
   const plan = { file, settings: [], skipped: 0, mapping: [], cal: null };
+  const old = !(Number(file.format) >= 2);
   for (const e of file.settings) {
     const s = byId.get(Number(e.id));
     if (!s || isData(s) !== Array.isArray(e.data)) { plan.skipped++; continue; }
+    if (old && (s.profile & 2)) { plan.skipped++; continue; }   // a real value, now a percentage
     if (isData(s)) {
       const data = e.data.slice(0, 26).map((v) => Math.max(0, Math.min(65535, Math.round(Number(v) || 0))));
       if (JSON.stringify(data) !== JSON.stringify(s.data)) plan.settings.push({ s, data });
@@ -1337,6 +1521,11 @@ async function planFile(file) {
     const pb = await planBinds(file.binds, call);
     plan.binds = pb.changes;
     plan.skipped += pb.skipped;
+  }
+  if (file.binds_aim && typeof file.binds_aim === 'object' && hasFeat('BINDS')) {
+    const pa = await planBinds(file.binds_aim, call, 1);
+    plan.binds.push(...pa.changes);
+    plan.skipped += pa.skipped;
   }
   const c = file.calibration;
   if (c && hasFeat('CALIBRATION') && cal) {
@@ -1364,7 +1553,7 @@ function showPlan(plan) {
   html += part('mapping', `Button mapping: ${plan.mapping.length} different`, plan.mapping.length,
     plan.mapping.map((m) => `<li><b>${escapeHtml(name(m.i))}</b>: ${escapeHtml(mapName(m.was))} → ${escapeHtml(mapName(m.t))}</li>`).join(''), true);
   html += part('binds', `Button bindings: ${plan.binds.length} different`, plan.binds.length,
-    plan.binds.map((m) => `<li><b>${escapeHtml(name(m.i))}</b>: ${escapeHtml(bindLabel(m.was))} → ${escapeHtml(bindLabel(m.b))}</li>`).join(''), true);
+    plan.binds.map((m) => `<li><b>${escapeHtml(name(m.i))}${m.layer ? ' (aim page)' : ''}</b>: ${escapeHtml(bindLabel(m.was))} → ${escapeHtml(bindLabel(m.b))}</li>`).join(''), true);
   // Calibration is for one controller's sticks, so it is never ticked for you
   html += part('cal', 'Stick calibration (only if this file came from this same controller)', plan.cal ? 1 : 0, '', false);
   const any = plan.settings.length || plan.mapping.length || plan.binds.length || plan.cal;
@@ -1405,7 +1594,7 @@ async function applyPlan(plan) {
   }
   if (on('binds')) {
     for (const m of plan.binds) {
-      const r = await call('SET_BIND', { source: m.i, bind: m.b });
+      const r = await call('SET_BIND', { source: m.i, bind: m.b, layer: m.layer ?? 0 });
       if (r.status === 'OK') done++; else bad.push(`${name(m.i)} binding (${r.status})`);
     }
   }
@@ -1541,6 +1730,48 @@ $('connect').addEventListener('click', guard(async () => {
   if (d) await connect(d);
 }));
 $('disconnect').addEventListener('click', guard(disconnect));
+// ------------------------------------------------------------------ trackball live view
+
+let tbTimer = null;
+
+function tbLive(f) {
+  const fl = f.flags;
+  const deg = (v) => (v / 10).toFixed(1);
+  const pads = Array.from(f.pads).map((v, i) => `<span class="pad-cell ${(f.touched >> i) & 1 ? 'on' : ''}">
+      <b>${i + 1}</b>${v}</span>`).join('');
+  const tilt = ['forward', 'back', 'right', 'left'].filter((_, i) => (f.tilt >> i) & 1).join(', ') || 'none';
+  $('tb-live').innerHTML = `
+    <div class="stat"><div class="k">Gyro (IMU)</div><b>${fl & 1 ? (fl & 2 ? 'zeroing...' : 'OK') : 'not found'}</b>
+      <div class="sub">pitch ${deg(f.pitch)}°, roll ${deg(f.roll)}°</div>
+      <div class="sub">gyro ${Array.from(f.gyro).map(deg).join(' / ')} °/s</div></div>
+    <div class="stat"><div class="k">Page</div><b>${fl & 8 ? 'Aim (LT held)' : 'Main'}</b>
+      <div class="sub">tilt keys: ${tilt}; lean: ${f.lean < 0 ? 'left' : f.lean > 0 ? 'right' : 'none'}</div>
+      <div class="sub">spin hold: ${fl & 16 ? 'running' : 'off'}</div></div>
+    <div class="stat wide"><div class="k">Touch pads ${fl & 4 ? '' : '(not found)'}</div><div class="pads">${pads}</div></div>
+    <div class="stat"><div class="k">Engine</div><b>${f.max_tick_us} µs</b><div class="sub">slowest tick</div></div>`;
+}
+
+async function tbPoll() {
+  if (!dev || product !== 'TRACKBALL' || document.querySelector('#tabs button.active')?.dataset.tab !== 'trackball') return;
+  const r = await call('TB_STATUS');
+  if (r.status === 'OK') tbLive(r.fields);
+}
+
+function tbStart() {
+  clearInterval(tbTimer);
+  tbTimer = setInterval(() => { tbPoll().catch(() => {}); }, 250);
+}
+
+const tbAction = (a, done) => guard(async () => {
+  const r = await call('TB_ACTION', { action: a });
+  note('tb-msg', r.status === 'OK' ? done : `Refused (${r.status}).`, r.status === 'OK');
+  if (r.status === 'OK' && a === 2) await loadSettings();   // the drive zero settings moved
+});
+$('tb-imu-zero').addEventListener('click', tbAction(1, 'Zeroing: hold it still for a moment.'));
+$('tb-drive-zero').addEventListener('click', tbAction(2, 'Tilt drive zero set to how it is held now.'));
+$('tb-cap-base').addEventListener('click', tbAction(3, 'Pad baseline re-taken: hands off the pads.'));
+tbStart();
+
 document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 buildFolds();
 try { showTab(localStorage.getItem('thirst.tab') || 'home'); } catch { showTab('home'); }

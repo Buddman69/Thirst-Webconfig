@@ -309,3 +309,48 @@ button.reset:not(:disabled):hover { color: var(--hot); }
 .ft-adjust { min-width: 120px; }
 .ft-adjust[aria-pressed="true"] { border-color: var(--hot); background: rgba(255, 90, 36, .15); color: #fff; box-shadow: var(--glow); }
 #sec-finetune.view-only .ft-vals input { opacity: .55; }
+
+/* Trackball tab */
+.tb-live { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+.tb-live .stat.wide { grid-column: 1 / -1; }
+.tb-live .pads { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+.tb-live .pad-cell { border: 1px solid var(--line); border-radius: 3px; padding: 3px 0; text-align: center; font-size: 12px; }
+.tb-live .pad-cell b { display: block; font-size: 10px; color: var(--muted); }
+.tb-live .pad-cell.on { border-color: var(--hot); box-shadow: var(--glow); }
+@media (max-width: 640px) { .tb-live .pads { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.tb-settings { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
+@media (max-width: 640px) { .tb-settings { grid-template-columns: 1fr; } }
+.tb-group h2 { margin-top: 0; }
+.tb-body { display: flex; flex-direction: column; gap: 2px; }
+
+/* Bezier editor */
+.bez { border: 1px solid var(--line); border-radius: 3px; padding: 8px 10px; margin: 6px 0; background: #0a0b0e; }
+.bez-title { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.bez svg { width: 100%; max-width: 220px; display: block; margin: 0 auto; touch-action: none; }
+.bez .frame { fill: none; stroke: #2c3038; stroke-width: 1.5; }
+.bez .ref { stroke: #4a4d55; stroke-dasharray: 4 4; }
+.bez .arm { stroke: #6b6e76; stroke-width: 1; }
+.bez .bez-line { stroke: var(--hot); stroke-width: 2.5; }
+.bez .handle { fill: #0a0b0e; stroke: var(--hot); stroke-width: 2; cursor: grab; }
+.bez .handle:hover { fill: var(--hot); }
+.bez-nums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+.bez-nums label { display: flex; flex-direction: column; font-size: 10px; color: var(--muted); }
+.bez-nums input { width: 100%; padding: 3px 2px; font-size: 12px; text-align: center; }
+.bez-row { display: flex; gap: 6px; margin-top: 6px; }
+.bez-row button { padding: 3px 9px; font-size: 12px; }
+
+.curve-type button.active { border-color: var(--hot); box-shadow: var(--glow); }
+.bez-panel { margin-top: 6px; }
+
+/* Inactive: the switch this hangs off is off */
+.setting.inactive, .bez.inactive { opacity: .42; }
+.setting.inactive .ctl, .bez.inactive svg { filter: grayscale(1); }
+.inactive-tag { margin-left: 8px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 3px;
+  font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+
+/* Advanced: Controller across the top, the two sticks under it */
+#settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#settings .scol.full { grid-column: 1 / -1; column-width: 320px; column-gap: 28px; }
+#settings .scol.full > h3 { column-span: all; }
+#settings .scol.full > .group, #settings .scol.full > .setting, #settings .scol.full > .bez { break-inside: avoid; }
+@media (max-width: 640px) { #settings { grid-template-columns: 1fr; } }

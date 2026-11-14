@@ -72,16 +72,17 @@ function codeToName(code) {
   return CODE_NAMES[code] ?? null;
 }
 
-let st = null;   // { host, call, note, guard, binds, changed, present }
-let capturing = null;   // { i, row }
+let st = null;   // { host, call, note, guard, binds, changed, present, layer }
+let capturing = null;   // { box, onPick }
 
+// layer: 0 the main page, 1 the aim page (in use while LT is held)
 export async function initBinds(host, call, note, guard) {
-  st = { host, call, note, guard };
+  st = { host, call, note, guard, layer: st?.layer ?? 0 };
   await load();
 }
 
 async function load(reply) {
-  const r = reply ?? await st.call('GET_BINDS');
+  const r = reply ?? await st.call('GET_BINDS', { layer: st.layer });
   st.binds = Array.from(r.fields.binds);
   st.changed = r.fields.changed;
   st.present = r.fields.present;
@@ -89,8 +90,10 @@ async function load(reply) {
 }
 
 async function setBind(i, b) {
-  const r = await st.call('SET_BIND', { source: i, bind: b });
-  st.note(r.status === 'OK' ? `${tbName(i)}: ${b === KBM_BIND.default ? 'back to default' : bindLabel(b)}.` : `Refused (${r.status}).`,
+  const r = await st.call('SET_BIND', { source: i, bind: b, layer: st.layer });
+  const page = st.layer ? ' (aim page)' : '';
+  const back = st.layer ? 'as the main page' : 'back to default';
+  st.note(r.status === 'OK' ? `${tbName(i)}${page}: ${b === KBM_BIND.default ? back : bindLabel(b)}.` : `Refused (${r.status}).`,
     r.status === 'OK');
   endCapture();
   await load(r);
@@ -107,6 +110,20 @@ function options(cur) {
 function render() {
   const host = st.host;
   host.innerHTML = '';
+  // The two pages: main, and aim (while LT is held). An aim binding left alone is the main one.
+  const pages = document.createElement('div');
+  pages.className = 'row';
+  pages.style.marginTop = '0';
+  pages.innerHTML = `<span class="muted">Page:</span>
+    <button data-layer="0" class="${st.layer ? '' : 'active'}" aria-pressed="${!st.layer}">Main</button>
+    <button data-layer="1" class="${st.layer ? 'active' : ''}" aria-pressed="${!!st.layer}">Aim (LT held)</button>
+    <span class="muted small">${st.layer ? 'While LT is held these replace the main page. A button left as default does what it does on the main page.' : 'What each button does normally.'}</span>`;
+  pages.querySelectorAll('[data-layer]').forEach((b) => b.addEventListener('click', st.guard(async () => {
+    st.layer = Number(b.dataset.layer);
+    endCapture();
+    await load();
+  })));
+  host.appendChild(pages);
   const has = (i) => (st.present >>> i) & 1;
   const known = new Set(GROUPS.flatMap(([, ks]) => ks));
   const groups = GROUPS.concat([['Other', ENUMS.tb_button.filter((b) => !known.has(b))]]);
@@ -123,7 +140,7 @@ function render() {
       row.innerHTML = `<div>${escapeHtml(tbName(i))} ${changed ? '<span class="changed">changed</span>' : ''}</div>
         <button class="bind-pill" title="Change what ${escapeHtml(tbName(i))} presses">${escapeHtml(bindLabel(st.binds[i]))}</button>
         <button ${changed ? '' : 'disabled'} data-act="def">Default</button>`;
-      row.querySelector('.bind-pill').addEventListener('click', () => startCapture(i, row));
+      row.querySelector('.bind-pill').addEventListener('click', () => captureBinding(row, tbName(i), (b) => st.guard(() => setBind(i, b))()));
       row.querySelector('[data-act=def]').addEventListener('click', st.guard(() => setBind(i, KBM_BIND.default)));
       g.appendChild(row);
     }
@@ -133,7 +150,7 @@ function render() {
   const foot = document.createElement('div');
   foot.className = 'row';
   foot.innerHTML = `<button ${n ? '' : 'disabled'}>Reset all to default</button>
-    <span class="muted small">${n ? `${n} changed in this profile` : 'All buttons as they come'}. Click a binding to change it.</span>`;
+    <span class="muted small">${n ? `${n} ${st.layer ? 'differ from the main page' : 'changed in this profile'}` : (st.layer ? 'Every button as on the main page' : 'All buttons as they come')}. Click a binding to change it.</span>`;
   foot.querySelector('button').addEventListener('click', st.guard(resetAll));
   host.appendChild(foot);
 }
@@ -141,35 +158,39 @@ function render() {
 async function resetAll() {
   let last = null;
   for (let i = 0; i < st.binds.length; i++) {
-    if ((st.changed >>> i) & 1) last = await st.call('SET_BIND', { source: i, bind: KBM_BIND.default });
+    if ((st.changed >>> i) & 1) last = await st.call('SET_BIND', { source: i, bind: KBM_BIND.default, layer: st.layer });
   }
-  st.note('Every button back to its default.', true);
+  st.note(st.layer ? 'The aim page is the main page again.' : 'Every button back to its default.', true);
   await load(last ?? undefined);
 }
 
 // ------------------------------------------------------------------ capture: press a key or click
 
-function startCapture(i, row) {
+// Below row: press a key, click with a mouse button, or pick from the list. onPick(binding).
+// Used for the buttons and for settings that are a binding (walk key, tilt keys, lean keys).
+export function captureBinding(row, label, onPick, allowNone = true) {
   endCapture();
   const box = document.createElement('div');
   box.className = 'bind-capture';
   box.innerHTML = `<div class="bind-target" tabindex="0">Press a key, or click here with any mouse button</div>
     <div class="row" style="margin-top:6px">
-      <select aria-label="Pick what ${escapeHtml(tbName(i))} presses">${options()}</select>
+      <select aria-label="Pick what ${escapeHtml(label)} presses">${options()}</select>
       <button data-act="cancel">Cancel</button>
     </div>`;
+  if (!allowNone) box.querySelector('option[value="0"]')?.remove();
   row.after(box);
   const target = box.querySelector('.bind-target');
+  const pick = (b) => { endCapture(); onPick(b); };
   target.focus();
   target.addEventListener('mousedown', (e) => {
     e.preventDefault();
     const k = [0, 2, 1, 3, 4][e.button];   // DOM left, middle, right, back, forward -> HID order
-    if (k !== undefined && k < KBM_MOUSE_BUTTONS) st.guard(() => setBind(i, KBM_BIND.mouse | k))();
+    if (k !== undefined && k < KBM_MOUSE_BUTTONS) pick(KBM_BIND.mouse | k);
   });
   target.addEventListener('contextmenu', (e) => e.preventDefault());
-  box.querySelector('select').addEventListener('change', (e) => st.guard(() => setBind(i, Number(e.target.value)))());
+  box.querySelector('select').addEventListener('change', (e) => pick(Number(e.target.value)));
   box.querySelector('[data-act=cancel]').addEventListener('click', endCapture);
-  capturing = { i, box, row };
+  capturing = { box, pick };
   window.addEventListener('keydown', onKey, true);
   window.addEventListener('keyup', onKeyUp, true);   // Print Screen only arrives on key up
 }
@@ -184,8 +205,7 @@ function takeKey(e) {
     capturing.box.querySelector('.bind-target').textContent = `That key (${e.code || e.key}) can't be sent; pick from the list instead`;
     return;
   }
-  const i = capturing.i;
-  st.guard(() => setBind(i, KBM_BIND.key | KBM_KEYS[nm]))();
+  capturing.pick(KBM_BIND.key | KBM_KEYS[nm]);
 }
 
 function onKey(e) {
@@ -206,11 +226,13 @@ function endCapture() {
 
 // ------------------------------------------------------------------ save and load
 
-export async function bindsForFile(call) {
-  const r = (await call('GET_BINDS')).fields;
+// layer 1 (the aim page): only the buttons bound differently from the main page, so the rest go
+// on following it when the file is loaded
+export async function bindsForFile(call, layer = 0) {
+  const r = (await call('GET_BINDS', { layer })).fields;
   const out = {};
   ENUMS.tb_button.forEach((b, i) => {
-    if ((r.present >>> i) & 1) {
+    if ((r.present >>> i) & 1 && (!layer || (r.changed >>> i) & 1)) {
       const t = bindText(r.binds[i]);
       if (t) out[b] = t;
     }
@@ -219,15 +241,15 @@ export async function bindsForFile(call) {
 }
 
 // [{ i, b, was }] for the bindings in the file that differ; skipped counts the unusable ones
-export async function planBinds(fileBinds, call) {
-  const r = (await call('GET_BINDS')).fields;
+export async function planBinds(fileBinds, call, layer = 0) {
+  const r = (await call('GET_BINDS', { layer })).fields;
   const changes = [];
   let skipped = 0;
   for (const [name, text] of Object.entries(fileBinds)) {
     const i = ENUMS.tb_button.indexOf(name);
     const b = bindFromText(text);
     if (i < 0 || b === null || !((r.present >>> i) & 1)) { skipped++; continue; }
-    if (r.binds[i] !== b) changes.push({ i, b, was: r.binds[i] });
+    if (r.binds[i] !== b) changes.push({ i, b, was: r.binds[i], layer });
   }
   return { changes, skipped };
 }

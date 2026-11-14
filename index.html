@@ -18,6 +18,7 @@
     <button data-tab="home" class="active">Home</button>
     <button data-tab="sticks">Sticks</button>
     <button data-tab="buttons">Buttons</button>
+    <button data-tab="trackball" id="tab-trackball-btn" class="hidden">Trackball</button>
     <button data-tab="advanced">Advanced</button>
   </nav>
   <div class="conn">
@@ -183,6 +184,24 @@
         <h2>Buttons</h2>
         <div id="settings-buttons" class="side-settings"></div>
       </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ TRACKBALL (trackball only) -->
+  <div class="tab hidden" data-tab="trackball">
+    <div class="grid">
+      <section class="panel span-12" id="sec-tb-live">
+        <h2>Trackball live <button class="info" data-info="tblive" aria-label="About the live view">i</button></h2>
+        <div id="tb-live" class="tb-live"></div>
+        <div class="row">
+          <button id="tb-imu-zero">Zero the gyro</button>
+          <button id="tb-drive-zero">Set tilt drive zero</button>
+          <button id="tb-cap-base">Re-take pad baseline</button>
+        </div>
+        <p class="muted small">Zero the gyro with the controller still and level, as you hold it. It takes a quarter of a second.</p>
+        <div class="msg" id="tb-msg"></div>
+      </section>
+      <div id="tb-settings" class="tb-settings span-12"></div>
     </div>
   </div>
 
