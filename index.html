@@ -123,10 +123,14 @@
         </div>
       </section>
 
-      <section class="panel span-12" id="sec-finetune">
+      <section class="panel span-12 view-only" id="sec-finetune">
         <h2>Fine-tune <button class="info" data-info="finetune" aria-label="About fine-tuning">i</button>
           <span id="ft-unsaved" class="changed hidden">unsaved changes</span></h2>
         <div class="row" style="margin-top:0">
+          <button id="ft-adjust" class="ft-adjust" aria-pressed="false">View only</button>
+          <span class="muted" id="ft-adjust-note">Press to adjust. It goes back to view only when you leave this tab or the page.</span>
+        </div>
+        <div class="row">
           <span class="muted">View:</span>
           <button data-view="normal" class="view-btn">Normal</button>
           <button data-view="zoom" class="view-btn">Centre ×10</button>

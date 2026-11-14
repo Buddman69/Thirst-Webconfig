@@ -8,16 +8,16 @@ const USAGE_NAME = Object.fromEntries(Object.entries(KBM_KEYS).map(([n, u]) => [
 const MOUSE = ['Left click', 'Right click', 'Middle click', 'Back', 'Forward'].slice(0, KBM_MOUSE_BUTTONS);
 const FRIENDLY = {
   RT: 'RT', LT: 'LT', ALPS: 'Stick click', HOME: 'Home', TAB: 'Tab', MAP: 'Map', BOTTOM_L: 'Bottom L',
-  RB: 'RB', RB2: 'RB2', BOTTOM_R: 'Bottom R', X: 'X', RB_MCP: 'RB (A2)', RB2_MCP: 'RB2 (A3)', A: 'A',
+  RB: 'RB', RB2: 'RB2', BOTTOM_R: 'Bottom R', X: 'X', Y: 'Y', B: 'B', A: 'A',
   SCROLL_BTN: 'Scroll button', LB: 'LB', LB2: 'LB2', MIC: 'Mic', DPAD_UP: 'D-pad up',
   DPAD_RIGHT: 'D-pad right', DPAD_DOWN: 'D-pad down', DPAD_LEFT: 'D-pad left', SPARE: 'Spare (B7)',
 };
 const GROUPS = [
   ['Triggers', ['RT', 'LT']],
-  ['Bumpers', ['LB', 'LB2', 'RB', 'RB2', 'RB_MCP', 'RB2_MCP']],
+  ['Bumpers', ['LB', 'LB2', 'RB', 'RB2']],
   ['Top buttons', ['HOME', 'TAB', 'MAP', 'MIC']],
   ['Bottom buttons', ['BOTTOM_L', 'BOTTOM_R']],
-  ['Face buttons', ['A', 'X']],
+  ['Face buttons', ['A', 'B', 'X', 'Y']],
   ['Stick and scroll', ['ALPS', 'SCROLL_BTN']],
   ['D-pad', ['DPAD_UP', 'DPAD_RIGHT', 'DPAD_DOWN', 'DPAD_LEFT']],
 ];

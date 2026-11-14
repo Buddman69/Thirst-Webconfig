@@ -281,6 +281,9 @@ button.reset:not(:disabled):hover { color: var(--hot); }
 .editor .pt { fill: #0a0b0e; stroke: var(--hot); stroke-width: 2; cursor: grab; }
 .editor .pt:hover, .editor .pt.drag { fill: var(--hot); }
 .editor .pt.fixed { cursor: default; stroke: #6b6e76; }
+.editor .pt.end { stroke: #b0b3ba; cursor: ns-resize; }
+.editor .pt.sel { stroke: #fff; stroke-width: 2.5; filter: drop-shadow(0 0 4px rgba(255, 90, 36, .9)); }
+.editor .point-panel .tools { margin-top: 4px; }
 .editor .ok-pt { fill: var(--ok); } .editor .bad-pt { fill: var(--bad); }
 .editor .part-pt { fill: none; stroke: var(--muted); stroke-width: 1.5; }   /* passed one way so far */
 .editor .lbl { fill: var(--muted); font: 11px Inter, sans-serif; }
@@ -301,3 +304,8 @@ button.reset:not(:disabled):hover { color: var(--hot); }
   header { padding: 10px 14px; } nav { order: 3; flex-basis: 100%; overflow-x: auto; justify-content: flex-start; }
   .map-row { grid-template-columns: 1fr; } main { padding: 12px 12px 48px; }
 }
+
+/* Fine-tune: view only until switched to adjusting */
+.ft-adjust { min-width: 120px; }
+.ft-adjust[aria-pressed="true"] { border-color: var(--hot); background: rgba(255, 90, 36, .15); color: #fff; box-shadow: var(--glow); }
+#sec-finetune.view-only .ft-vals input { opacity: .55; }

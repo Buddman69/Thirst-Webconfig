@@ -30,7 +30,7 @@ const FRIENDLY = {
 const CAL_TEXT = {
   IDLE: 'Calibrated.', UNCALIBRATED: 'Not calibrated yet: the sticks use the full ADC range.',
   RANGE: 'Move both sticks round their full travel a few times, then let go and press Take centre.',
-  CENTRE: 'Hands off the sticks...', FAILED: 'Rejected: too little travel, or a stick moved. Nothing changed.',
+  CENTRE: 'Hands off the sticks...', FAILED: 'Rejected: too little travel, a stick moved, or a stick was not centred for the centre step. Nothing changed.',
   RECENTRE: 'Recentring: hands off the sticks...',
   SHAPE: 'Measuring the stick shape: roll both sticks round their edge (see Stick shape).',
 };
@@ -321,6 +321,7 @@ function buildFolds() {
 // ------------------------------------------------------------------ tabs
 
 function showTab(name) {
+  if (name !== 'sticks' && ftAdjust) setAdjust(false);
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('hidden', t.dataset.tab !== name));
   try { localStorage.setItem('thirst.tab', name); } catch { /* storage off */ }
@@ -521,6 +522,24 @@ function updateDispBits() {
 let outBitsSetting = null;
 let boardName = '';
 let ftView = 'normal';
+// Fine-tune starts view only: nothing changes the calibration (controller buttons, arrow keys,
+// the value boxes) until "Adjust" is switched on, and it switches itself off again when you
+// leave the Sticks tab or this page.
+let ftAdjust = false;
+
+function setAdjust(on) {
+  ftAdjust = on;
+  const b = $('ft-adjust');
+  b.setAttribute('aria-pressed', String(on));
+  b.textContent = on ? 'Adjusting' : 'View only';
+  $('ft-adjust-note').textContent = on
+    ? 'Controller buttons, arrow keys and the values below change the calibration. Press again to stop.'
+    : 'Press to adjust. It goes back to view only when you leave this tab or the page.';
+  $('sec-finetune').classList.toggle('view-only', !on);
+  document.querySelectorAll('.ft-vals input').forEach((i) => { i.disabled = !on; });
+  for (const k of Object.keys(held)) delete held[k];
+  keys.clear();
+}
 const BINS = 48;
 const trace = [new Array(BINS).fill(0), new Array(BINS).fill(0)];
 const STICKS = [{ label: 'Left stick', x: 0, y: 1 }, { label: 'Right stick', x: 2, y: 3 }];
@@ -596,6 +615,7 @@ function buildFinetune() {
   });
   labelRowButtons();
   setView(ftView);
+  setAdjust(ftAdjust);
 }
 
 function setView(v) {
@@ -628,7 +648,7 @@ function setCal(fields) {
 }
 
 async function nudge(st, k, d) {
-  if (!cal) return;
+  if (!cal || !ftAdjust) return;
   const min = [...cal.min];
   const centre = [...cal.centre];
   const max = [...cal.max];
@@ -643,7 +663,7 @@ async function nudge(st, k, d) {
     arr[e.a] = e.which === 'min' ? Math.max(0, centre[e.a] - reach) : Math.min(cal.adc_max, centre[e.a] + reach);
   }
   const r = await call('CAL_SET', { min, centre, max });
-  if (r.status !== 'OK') note('ft-msg', `Refused (${r.status}).`, false);
+  if (r.status !== 'OK') note('ft-msg', `Refused (${r.status}): a centre must stay near the middle of its stick's travel.`, false);
   setCal(r.fields);
 }
 
@@ -797,6 +817,17 @@ function padControl(s) {
   if (pushedL !== pushedR) setActive(pushedL ? 0 : 1);
   else if (pushedL && pushedR) setActive(null);
 
+  // The controller's own buttons drive fine-tune only while you are looking at it: this page in
+  // front and focused, on the Sticks tab. Otherwise a game played with the page open behind it
+  // nudges the calibration with every L1, D-pad and L2/R2 press.
+  if (!ftAdjust) {
+    $('ft-pad').innerHTML = 'View only: the controller’s buttons change nothing here.';
+    return;
+  }
+  if (document.visibilityState !== 'visible' || !document.hasFocus() || $('ft-pad').offsetParent === null) {
+    setAdjust(false);	// left the page or the tab: back to view only
+    return;
+  }
   const now = performance.now();
   const pressed = padPressed(s);
   for (const [name, on] of Object.entries(pressed)) {
@@ -854,7 +885,8 @@ function renderHistory() {
     row.querySelector('button').addEventListener('click', guard(async () => {
       const r = await call('CAL_SET', { min: e.min, centre: e.centre, max: e.max });
       setCal(r.fields);
-      note('ft-msg', r.status === 'OK' ? 'Restored. Press Save to keep it.' : `Refused (${r.status}).`, r.status === 'OK');
+      note('ft-msg', r.status === 'OK' ? 'Restored. Press Save to keep it.'
+        : `Refused (${r.status}): this saved calibration has a centre far off its stick's middle (taken with a stick held).`, r.status === 'OK');
     }));
     list.appendChild(row);
   });
@@ -1380,7 +1412,7 @@ async function applyPlan(plan) {
   if (on('cal') && plan.cal) {
     const r = await call('CAL_SET', { min: plan.cal.min, centre: plan.cal.centre, max: plan.cal.max });
     const s = r.status === 'OK' ? await call('CAL_SAVE') : r;
-    if (s.status === 'OK') { done++; setCal(s.fields); rememberCal(); } else bad.push(`calibration (${s.status})`);
+    if (s.status === 'OK') { done++; setCal(s.fields); rememberCal(); } else bad.push(`calibration (${s.status}: a centre far off its stick's middle)`);
   }
   closePlan();
   if (hasFeat('SETTINGS')) await loadSettings();
@@ -1521,11 +1553,14 @@ document.addEventListener('click', (e) => {
   if (btn) { e.stopPropagation(); guard(toggleInfo)(btn); }
 });
 document.querySelectorAll('.view-btn').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+$('ft-adjust').addEventListener('click', () => setAdjust(!ftAdjust));
+document.addEventListener('visibilitychange', () => { if (document.visibilityState !== 'visible') setAdjust(false); });
+window.addEventListener('blur', () => setAdjust(false));
 document.querySelectorAll('.ft-stick').forEach((el) => el.addEventListener('click', () => setActive(Number(el.dataset.stick))));
 // Arrow keys act as the D-pad while a fine-tune mode is on
 window.addEventListener('keydown', (e) => {
   const k = KEYMAP[e.key];
-  if (k && cal && (ftView === 'zoom' || ftView === 'circle') && !(e.target instanceof HTMLSelectElement)) {
+  if (k && cal && ftAdjust && (ftView === 'zoom' || ftView === 'circle') && !(e.target instanceof HTMLSelectElement)) {
     keys.add(k);
     e.preventDefault();
   }
