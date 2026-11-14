@@ -9,6 +9,7 @@ import { initCurves, curveLive } from './curve.js';
 import { initShapes, shapeCalState, shapeLive } from './shape.js';
 import { initBinds, tbName, bindLabel, bindsForFile, planBinds, captureBinding } from './binds.js';
 import { bezierEditor } from './bezier.js';
+import { MANUAL } from './manual.js';
 
 const DEVICES = [
   { vendorId: 0x054C, productId: 0x0CE6, usagePage: HID_USAGE_PAGE },  // DualSense output mode
@@ -65,8 +66,9 @@ const INFO = {
   finetune: 'Adjust each stick by hand while watching the result, then save. Centre moves where the stick '
     + 'reads zero. Reach is how far the stick travels to read 100 % in each direction: less reach reaches full '
     + 'sooner. Values are shown at the stick resolution the PC gets (8 bits in DualSense mode); the '
-    + 'controller always keeps them as 16-bit counts, so nothing is lost. You can also tune from the controller itself: L1 for centre mode, '
-    + 'R1 for circularity, then the D-pad or face buttons. Changes are live but only kept when you press Save.',
+    + 'controller always keeps them as 16-bit counts, so nothing is lost. Fine-tune starts in View only: press it to switch to Adjusting. While adjusting you can also tune from '
+    + 'the controller itself: L1 for centre mode, R1 for circularity, then the D-pad or face buttons. It goes back to '
+    + 'View only when you leave this tab or the page. Changes are live but only kept when you press Save.',
   cal: 'Measures each stick\'s travel and centre. Press Start, roll both sticks around their full edge a few '
     + 'times, let go, then press Take centre and keep your hands off for a second. The table shows the result '
     + 'at the stick resolution the PC gets; the controller stores 16-bit counts whatever is shown. Rest noise is how much a stick wobbles when nobody touches it. Outside a '
@@ -83,9 +85,11 @@ const INFO = {
     + 'edge, a few turns each way, then Finish; the points are then set from your stick so full tilt goes just past '
     + '100 % in every direction (the headroom below). Turn Overshoot on to trim that to a perfect circle. Drag any '
     + 'point to fine-tune, or pick a shape. The shape belongs to the stick, so it is the same in every profile.',
-  curve: 'How the stick responds between centre and edge, for each stick. The straight line is linear. Lower '
-    + 'points in the middle give finer control near centre; higher points a faster start. The orange dot is '
-    + 'where the stick is now. The deadzone settings below apply before the curve.',
+  curve: 'How the stick responds between centre and edge, for each stick. Points: drag any point, double-click '
+    + 'to add one, and give each a smoothness from 1 (a sharp corner) to 10. Bezier: drag the curve’s two '
+    + 'handles, with axial lock to pull the stick onto the nearest axis. Lower in the middle gives finer control '
+    + 'near centre; higher a faster start. The orange dot is where the stick is now. The deadzone below applies '
+    + 'before the curve; invert flips an axis on the final output.',
   settings: 'Options this controller offers. Each one saves on the controller as you change it. Press (i) '
     + 'beside a setting to see what it does.',
   profile: 'The controller keeps 8 profiles, each with its own settings and button mapping. Calibration and the '
@@ -146,8 +150,8 @@ async function connect(d) {
   $('connect').classList.add('hidden');
   $('disconnect').classList.remove('hidden');
   $('connect-help').classList.add('hidden');
-  $('app').classList.remove('hidden');
-  $('tabs').classList.remove('hidden');
+  document.querySelectorAll('#tabs .needs-dev').forEach((b) => b.classList.remove('hidden'));
+  if (currentTab() !== 'manual') $('app').classList.remove('hidden');
   const f = hello.fields;
   const has = (feat) => (f.features >> ENUMS.feature.indexOf(feat)) & 1;
   feats = f.features;
@@ -206,8 +210,8 @@ async function disconnect() {
   $('connect').classList.remove('hidden');
   $('disconnect').classList.add('hidden');
   $('app').classList.add('hidden');
-  $('tabs').classList.add('hidden');
-  $('connect-help').classList.remove('hidden');
+  document.querySelectorAll('#tabs .needs-dev, #tab-trackball-btn').forEach((b) => b.classList.add('hidden'));
+  if (currentTab() !== 'manual') $('connect-help').classList.remove('hidden');
   $('status').textContent = 'Not connected';
 }
 
@@ -326,12 +330,51 @@ function buildFolds() {
 
 // ------------------------------------------------------------------ tabs
 
+function currentTab() {
+  return document.querySelector('#tabs button.active')?.dataset.tab ?? 'home';
+}
+
 function showTab(name) {
   if (name !== 'sticks' && ftAdjust) setAdjust(false);
+  // Without a controller only the Manual is there; the other tabs wait for one
+  if (!dev && name !== 'manual') name = 'home';
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.tab === name));
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('hidden', t.dataset.tab !== name));
+  const manual = name === 'manual';
+  $('app').classList.toggle('hidden', manual || !dev);
+  $('connect-help').classList.toggle('hidden', manual || !!dev);
+  if (manual) renderManual();
+  if (!manual && location.hash.startsWith('#manual')) history.replaceState(null, '', location.pathname + location.search);
   try { localStorage.setItem('thirst.tab', name); } catch { /* storage off */ }
 }
+
+// ------------------------------------------------------------------ manual
+// The player manuals (web/manual.js, built from docs/manual by tools/build_manual.py). A link is
+// #manual/<document>/<section>, so a section can be shared.
+
+let manualDoc = null;
+
+function renderManual() {
+  const [, docId, secId] = (location.hash.match(/^#manual\/([^/]+)(?:\/([^/]+))?/) ?? []);
+  const doc = MANUAL.find((d) => d.id === docId) ?? MANUAL.find((d) => d.id === manualDoc) ?? MANUAL[0];
+  manualDoc = doc.id;
+  $('man-nav').innerHTML = MANUAL.map((d) => `<div class="man-doc ${d.id === doc.id ? 'on' : ''}">
+      <a href="#manual/${d.id}" class="man-doc-link">${escapeHtml(d.short)}</a>
+      ${d.id === doc.id ? `<ul>${d.sections.map((x) => `<li><a href="#manual/${d.id}/${x.id}">${escapeHtml(x.title)}</a></li>`).join('')}</ul>` : ''}
+    </div>`).join('');
+  const body = $('man-body');
+  if (body.dataset.doc !== doc.id) {
+    body.innerHTML = `<h1>${escapeHtml(doc.title)}</h1>${doc.html}`;
+    body.dataset.doc = doc.id;
+  }
+  const target = secId ? document.getElementById(secId) : null;
+  if (target && body.contains(target)) target.scrollIntoView({ block: 'start' });
+  else window.scrollTo(0, 0);
+}
+
+window.addEventListener('hashchange', () => {
+  if (location.hash.startsWith('#manual')) showTab('manual');
+});
 
 // ------------------------------------------------------------------ mapping
 
@@ -1774,7 +1817,8 @@ tbStart();
 
 document.querySelectorAll('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
 buildFolds();
-try { showTab(localStorage.getItem('thirst.tab') || 'home'); } catch { showTab('home'); }
+if (location.hash.startsWith('#manual')) showTab('manual');
+else try { showTab(localStorage.getItem('thirst.tab') || 'home'); } catch { showTab('home'); }
 $('cal-start').addEventListener('click', guard(() => calStep('RANGE')));
 $('st-mode-sel').addEventListener('change', guard(setMode));
 $('cal-centre').addEventListener('click', guard(() => calStep(lastCalState === 'RANGE' ? 'CENTRE' : 'RECENTRE')));

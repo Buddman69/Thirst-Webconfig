@@ -14,12 +14,13 @@
 
 <header>
   <div class="brand"><span class="mark">THIRST</span><span class="sub">CONFIG</span></div>
-  <nav id="tabs" class="hidden" aria-label="Sections">
-    <button data-tab="home" class="active">Home</button>
-    <button data-tab="sticks">Sticks</button>
-    <button data-tab="buttons">Buttons</button>
+  <nav id="tabs" aria-label="Sections">
+    <button data-tab="home" class="active needs-dev hidden">Home</button>
+    <button data-tab="sticks" class="needs-dev hidden">Sticks</button>
+    <button data-tab="buttons" class="needs-dev hidden">Buttons</button>
     <button data-tab="trackball" id="tab-trackball-btn" class="hidden">Trackball</button>
-    <button data-tab="advanced">Advanced</button>
+    <button data-tab="advanced" class="needs-dev hidden">Advanced</button>
+    <button data-tab="manual">Manual</button>
   </nav>
   <div class="conn">
     <span id="status">Not connected</span>
@@ -34,6 +35,7 @@
      for its configuration interface when the browser asks.</p>
   <p class="muted">Needs a Chromium browser (Chrome, Edge) for WebHID. Nothing is installed; the page talks to
      the controller directly. Settings are saved on the controller.</p>
+  <p>New to it? Open the <a href="#manual/quick-start">Manual</a>.</p>
   <p id="no-webhid" class="msg bad hidden">This browser has no WebHID. Use Chrome or Edge.</p>
 </div>
 
@@ -221,6 +223,12 @@
   </div>
   <div class="msg toast" id="settings-msg"></div>
 </main>
+
+<!-- ============================================================ MANUAL (works without a controller) -->
+<div class="tab hidden" data-tab="manual" id="manual">
+  <aside class="man-nav" id="man-nav" aria-label="Manual contents"></aside>
+  <article class="man-body panel" id="man-body"></article>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>
